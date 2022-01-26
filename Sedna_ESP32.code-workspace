@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"name": "Sedna_ESP32",
+			"path": "."
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"task.h": "c"
+		}
+	}
+}
