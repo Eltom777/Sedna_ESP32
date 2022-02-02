@@ -9,7 +9,8 @@
 		"files.associations": {
 			"task.h": "c",
 			"esp_event_loop.h": "c",
-			"esp_event.h": "c"
+			"esp_event.h": "c",
+			"nvs_flash.h": "c"
 		}
 	}
 }
