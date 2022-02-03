@@ -1,4 +1,4 @@
-menu "Example Configuration"
+menu "WIFI Configuration"
 
 config ESP_WIFI_SSID
     string "WiFi SSID"
