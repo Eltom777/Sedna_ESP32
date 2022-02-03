@@ -78,7 +78,7 @@ void publish_telemetry_event(iotc_context_handle_t context_handle,
     IOTC_UNUSED(user_data);
 
     char *publish_topic = NULL;
-    asprintf(&publish_topic, PUBLISH_TOPIC_EVENT, GIOT_DEVICE_ID);
+    asprintf(&publish_topic, PUBLISH_TOPIC_EVENT, CONFIG_GIOT_DEVICE_ID);
     char *publish_message = NULL;
     asprintf(&publish_message, TEMPERATURE_DATA, MIN_TEMP + rand() % 10);
     ESP_LOGI(TAG, "publishing msg \"%s\" to topic: \"%s\"", publish_message, publish_topic);
@@ -137,12 +137,12 @@ void on_connection_state_changed(iotc_context_handle_t in_context_handle,
         /* Publish immediately upon connect. 'publish_function' is defined
            in this example file and invokes the IoTC API to publish a
            message. */
-        asprintf(&subscribe_topic_command, SUBSCRIBE_TOPIC_COMMAND, GIOT_DEVICE_ID);
+        asprintf(&subscribe_topic_command, SUBSCRIBE_TOPIC_COMMAND, CONFIG_GIOT_DEVICE_ID);
         ESP_LOGI(TAG, "subscribing to topic: \"%s\"", subscribe_topic_command);
         iotc_subscribe(in_context_handle, subscribe_topic_command, IOTC_MQTT_QOS_AT_LEAST_ONCE,
                        &iotc_mqttlogic_subscribe_callback, /*user_data=*/NULL);
 
-        asprintf(&subscribe_topic_config, SUBSCRIBE_TOPIC_CONFIG, GIOT_DEVICE_ID);
+        asprintf(&subscribe_topic_config, SUBSCRIBE_TOPIC_CONFIG, CONFIG_GIOT_DEVICE_ID);
         ESP_LOGI(TAG, "subscribing to topic: \"%s\"", subscribe_topic_config);
         iotc_subscribe(in_context_handle, subscribe_topic_config, IOTC_MQTT_QOS_AT_LEAST_ONCE,
                        &iotc_mqttlogic_subscribe_callback, /*user_data=*/NULL);
@@ -232,13 +232,13 @@ static void wifi_init(void)
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     wifi_config_t wifi_config = {
         .sta = {
-            .ssid = WIFI_SSID,
-            .password = WIFI_PASS,
+            .ssid = CONFIG_ESP_WIFI_SSID,
+            .password = CONFIG_ESP_WIFI_PASSWORD,
         },
     };
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
-    ESP_LOGI(TAG, "start the WIFI SSID:[%s]", WIFI_SSID);
+    //ESP_LOGI(TAG, "start the WIFI SSID:[%s]", CONFIG_ESP_WIFI_SSID);
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_LOGI(TAG, "Waiting for wifi");
     xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
@@ -285,7 +285,7 @@ static void mqtt_task(void *pvParameters)
     char jwt[IOTC_JWT_SIZE] = {0};
     size_t bytes_written = 0;
     iotc_state_t state = iotc_create_iotcore_jwt(
-                             GIOT_PROJECT_ID,
+                             CONFIG_GIOT_PROJECT_ID,
                              /*jwt_expiration_period_sec=*/3600, &iotc_connect_private_key_data, jwt,
                              IOTC_JWT_SIZE, &bytes_written);
 
@@ -295,7 +295,7 @@ static void mqtt_task(void *pvParameters)
     }
 
     char *device_path = NULL;
-    asprintf(&device_path, DEVICE_PATH, GIOT_PROJECT_ID, GIOT_LOCATION, GIOT_REGISTRY_ID, GIOT_DEVICE_ID);
+    asprintf(&device_path, DEVICE_PATH, CONFIG_GIOT_PROJECT_ID, CONFIG_GIOT_LOCATION, CONFIG_GIOT_REGISTRY_ID, CONFIG_GIOT_DEVICE_ID);
     iotc_connect(iotc_context, NULL, jwt, device_path, connection_timeout,
                  keepalive_timeout, &on_connection_state_changed);
     free(device_path);
