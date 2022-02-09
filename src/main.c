@@ -29,6 +29,8 @@ static int queue_size = 10;
 #define RELAY_PIN 4
 #define GPIO_RELAY_PIN_SEL (1ULL << RELAY_PIN)
 
+#define temp_threshold -5.0f
+
 static DS18B20_Info * ds18b20_info;
 static TickType_t last_wake_time;
 static OneWireBus * owb;
@@ -37,23 +39,14 @@ static OneWireBus_ROMCode rom_code;
 static owb_status status;
 
 static float currentTemp;
-static float desiredTemp = 26;
+
 static const char *TAG = "CTRL_APP";
 static int relayPower;
 
 typedef struct device_config_t{
     float desiredTemp;
 } device_config_t;
-
-static void queue_telemetry_data(void *pvParameters)
-{
-    for(;;)
-    {   
-        xQueueSendToBack(telemetry_queue, &currentTemp, (TickType_t)0);
-        
-        vTaskDelay(30000 / portTICK_RATE_MS);
-    }
-}
+static device_config_t device_config;
 
 typedef enum FSMstates{
         Idle_State,
@@ -63,6 +56,50 @@ typedef enum FSMstates{
         Turn_On_Relay_State,
         Turn_Off_Relay_State
 }FSMstates;
+
+float dequeue_telemetry()
+{
+    float data = temp_threshold;
+    if(data_queue != NULL)
+    {
+        if((int) uxQueueMessagesWaiting(data_queue) > 0)
+        {
+            xQueueReceive(data_queue, &data, (TickType_t)0);
+        }
+        else
+        {
+            ESP_LOGI(TAG, "Telemetry Queue is empty...");
+        }
+    }
+    else
+    {
+        ESP_LOGE(TAG, "Telemetry Queue is not set...");
+    }
+    return data;
+}
+
+static void enqueue_telemetry(void* pvParameters)
+{
+
+    if(data_queue == NULL)
+    {
+        ESP_LOGE(TAG, "Telemetry Queue is not set...");
+        return;
+    }
+
+    for(;;)
+    {
+        ESP_LOGI(TAG, "Queueing the value : %f", currentTemp);
+        xQueueSendToBack(data_queue, &currentTemp, (TickType_t)0);
+
+        vTaskDelay(10000 / portTICK_PERIOD_MS);
+    }    
+}
+
+static void update_device_config(float new_desired_temperature)
+{
+    device_config.desiredTemp = new_desired_temperature;
+}
 
 static void init_hw(void){
     gpio_config_t io_conf;
@@ -121,8 +158,7 @@ static void FSMTempCtrl(void* pvParameters)
     enum FSMstates state = Idle_State;
     for(;;)
     {
-        ESP_LOGI(TAG, "Desired Temp: %p", device_config);
-
+        ESP_LOGI(TAG,"Device Desired Temp: %f" ,device_config->desiredTemp);
         switch(state){
             case Idle_State:
                 state = Measure_State;
@@ -142,10 +178,13 @@ static void FSMTempCtrl(void* pvParameters)
             case Temp_Low_State:
                 ESP_LOGI(TAG,"At Low Temp State");
                 relayPower = gpio_get_level(RELAY_PIN);
-                if(relayPower == 1){
+                if(relayPower == 1)
+                {
                     ESP_LOGI(TAG,"Going to Turn Relay On State");
                     state = Turn_On_Relay_State;
-                }else {
+                }
+                else 
+                {
                     ESP_LOGI(TAG,"Going to Measure State.");
                     state = Measure_State;
                 }
@@ -153,10 +192,13 @@ static void FSMTempCtrl(void* pvParameters)
             case Temp_High_State:
                 ESP_LOGI(TAG,"At High Temp State");
                 relayPower = gpio_get_level(RELAY_PIN);
-                if(relayPower ==  0){
+                if(relayPower ==  0)
+                {
                     ESP_LOGI(TAG,"Going to Turn Relay Off State");
                     state = Turn_Off_Relay_State;
-                }else {
+                }
+                else 
+                {
                     ESP_LOGI(TAG,"Going to Measure State.");
                     state = Measure_State;
                 }
@@ -184,17 +226,17 @@ static void FSMTempCtrl(void* pvParameters)
 
 void app_main()
 {
-    /*TODO: figure out a way to share device config with 
-    iotc_mqttlogic_subscribe_callback inside app_wifi.*/
-    device_config_t* device_config = malloc(sizeof(device_config_t));
-    device_config->desiredTemp = 26.0;
-    
-    ESP_LOGI(TAG, "Init Desired Temp: %p", device_config);
+    device_config.desiredTemp = 17.0;
 
     data_queue = xQueueCreate(queue_size, sizeof(float));  
 
     /*Start STA Wifi connection*/
-    esp_sta_init(data_queue);
+    mqtt_callback_t mqtt_callback = 
+    {
+        .fetch_telemetry_event = dequeue_telemetry,
+        .update_config_event = update_device_config
+    };
+    esp_sta_init(mqtt_callback);
     
     init_hw();
     xTaskCreatePinnedToCore(&FSMTempCtrl, 
@@ -204,17 +246,16 @@ void app_main()
                             5, 
                             NULL, 
                             ctrl_core);
-    
-    /* Create a task to queue data every 30 seconds. */
-    xTaskCreatePinnedToCore(
-                    &queue_telemetry_data,         
-                    "Data read",        
-                    configMINIMAL_STACK_SIZE,    
-                    NULL,               
-                    5,                  
-                    NULL,               
-                    app_core);
 
-    free(device_config);
+    /* Create a task to queue data every 10 seconds. */ 
+    xTaskCreatePinnedToCore(&enqueue_telemetry, 
+                            "Enqueue Telemetry.", 
+                            3*configMINIMAL_STACK_SIZE,
+                            NULL, 
+                            5, 
+                            NULL, 
+                            ctrl_core);
+    
+
     ESP_LOGI(TAG, "Program quits");
 } 

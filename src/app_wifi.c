@@ -29,6 +29,10 @@
 #define PUBLISH_TOPIC_EVENT "/devices/%s/events"
 #define PUBLISH_TOPIC_STATE "/devices/%s/state"
 #define TEMPERATURE_DATA "{\"temperature\" : %f}"
+#define MIN_TEMP 20
+#define OUTPUT_GPIO 5
+
+#define temp_threshold -5.0f
 
 static const char *TAG = "WIFI_APP";
 
@@ -47,7 +51,7 @@ static iotc_timed_task_handle_t delayed_publish_task =
     IOTC_INVALID_TIMED_TASK_HANDLE;
 iotc_context_handle_t iotc_context = IOTC_INVALID_CONTEXT_HANDLE;
 
-QueueHandle_t telemetry_queue = NULL;
+static mqtt_callback_t m_mqtt_callback;
 
 
 static void initialize_sntp(void)
@@ -79,12 +83,11 @@ void publish_telemetry_event(iotc_context_handle_t context_handle,
     IOTC_UNUSED(timed_task);
     IOTC_UNUSED(user_data);
 
-    if(telemetry_queue != NULL){
-        if((int) uxQueueMessagesWaiting(telemetry_queue) > 0)
+    if(m_mqtt_callback.fetch_telemetry_event)
+    {
+        float data = m_mqtt_callback.fetch_telemetry_event();
+        if(data > temp_threshold)
         {
-            float data;
-            xQueueReceive(telemetry_queue, &data, (TickType_t)0);
-
             char *publish_topic = NULL;
             asprintf(&publish_topic, PUBLISH_TOPIC_EVENT, CONFIG_GIOT_DEVICE_ID);
             char *publish_message = NULL;
@@ -95,14 +98,13 @@ void publish_telemetry_event(iotc_context_handle_t context_handle,
                         iotc_example_qos,
                         /*callback=*/NULL, /*user_data=*/NULL);
             free(publish_topic);
-            free(publish_message);  
-        }
+            free(publish_message);
+        } 
     }
     else
     {
-        ESP_LOGE(TAG, "Telemetry Queue is not set...");
+        ESP_LOGE(TAG, "fetch_telemetry_event is not set...");
     }
-    
 }
 
 void iotc_mqttlogic_subscribe_callback(
@@ -127,16 +129,19 @@ void iotc_mqttlogic_subscribe_callback(
         /* TODO: Logic to set device config should happen here*/
         ESP_LOGI(TAG, "Message Payload: %s ", sub_message);
         if (strcmp(subscribe_topic_config, params->message.topic) == 0) {
-            /*
-            int value;
-            sscanf(sub_message, "{\"outlet\": %d}", &value);
-            ESP_LOGI(TAG, "value: %d", value);
-            if (value == 1) {
-                gpio_set_level(OUTPUT_GPIO, true);
-            } else if (value == 0) {
-                gpio_set_level(OUTPUT_GPIO, false);
+            
+            float value;
+            sscanf(sub_message, "{\"temperatureSetting\": %f}", &value);
+            ESP_LOGI(TAG, "new temperature value: %f", value);
+            
+            if(m_mqtt_callback.update_config_event)
+            {
+                m_mqtt_callback.update_config_event(value);
             }
-            */
+            else
+            {
+                ESP_LOGE(TAG, "update_config_event is not set...");
+            }
         }
         free(sub_message);
     }
@@ -334,9 +339,9 @@ static void handle_STA_wifi_connection(void *arg, esp_event_base_t event_base,
 }
 
 /* Start ESP in STA mode */
-void esp_sta_init(QueueHandle_t data_queue)
+void esp_sta_init(mqtt_callback_t mqtt_callback)
 {
-    telemetry_queue = data_queue;
+    m_mqtt_callback = mqtt_callback;
 
     // Init nvs
     if (nvs_flash_init() != ESP_OK)
