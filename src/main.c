@@ -44,7 +44,24 @@ static const char *TAG = "CTRL_APP";
 static int relayPower;
 
 typedef struct device_config_t{
+    //temperature system
     float desiredTemp;
+    float currTemp;
+    //feeder system
+    int feedTime;
+    bool feedNow; //force feed
+    int foodLeft; //feedings remaining
+    //wavermaker system
+    int waveOnTime;
+    int waveOffTime;
+    bool waveForce; //forcing device to stay on/off
+    //lighting system
+    int lightOnTime;
+    int lightOffTime;
+    bool lightForce; //forcing device to stay on/off
+    //water detectors
+    bool waterLevel; //true if water level is low
+    bool waterLeak; //true if water is detected
 } device_config_t;
 static device_config_t device_config;
 
