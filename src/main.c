@@ -40,6 +40,8 @@ static owb_status status;
 
 static float currentTemp;
 
+static TaskHandle_t feeding_task_handler;
+
 static const char *TAG = "CTRL_APP";
 static int relayPower;
 
@@ -72,7 +74,12 @@ typedef enum FSMstates{
         Temp_High_State,
         Turn_On_Relay_State,
         Turn_Off_Relay_State
-}FSMstates;
+} FSMstates;
+
+void feed_command_event() {
+    ESP_LOGI(TAG, "Resuming feeding task...");
+    vTaskResume(feeding_task_handler);
+}
 
 float dequeue_telemetry()
 {
@@ -153,7 +160,7 @@ static void init_hw(void){
     last_wake_time = xTaskGetTickCount();
 }
 
-static float TempRead(){
+static float TempRead() {
 
         static float readTemp;
         ds18b20_convert_all(owb);
@@ -241,6 +248,14 @@ static void FSMTempCtrl(void* pvParameters)
     }
 }
 
+static void feed_fish(void* pvParameters) {
+    for(;;) {
+        vTaskSuspend(NULL);
+        ESP_LOGI(TAG, "Feeding fish...");
+        //TODO: create and call servo control function
+    }
+}
+
 void app_main()
 {
     device_config.desiredTemp = 17.0;
@@ -251,7 +266,8 @@ void app_main()
     mqtt_callback_t mqtt_callback = 
     {
         .fetch_telemetry_event = dequeue_telemetry,
-        .update_config_event = update_device_config
+        .update_config_event = update_device_config,
+        .feed_command_event = feed_command_event
     };
     esp_sta_init(mqtt_callback);
     
@@ -271,6 +287,15 @@ void app_main()
                             NULL, 
                             5, 
                             NULL, 
+                            ctrl_core);
+
+    /* Create a task to control feeding servo. */
+    xTaskCreatePinnedToCore(&feed_fish, 
+                            "Feed Fish.", 
+                            configMINIMAL_STACK_SIZE,
+                            NULL, 
+                            6, 
+                            &feeding_task_handler, 
                             ctrl_core);
     
 

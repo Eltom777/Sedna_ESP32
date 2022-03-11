@@ -25,10 +25,12 @@
 
 #define DEVICE_PATH "projects/%s/locations/%s/registries/%s/devices/%s"
 #define SUBSCRIBE_TOPIC_COMMAND "/devices/%s/commands/#"
+#define SUBSCRIBE_TOPIC_COMMAND_WITHOUT_WILD_CARD "/devices/%s/commands"
 #define SUBSCRIBE_TOPIC_CONFIG "/devices/%s/config"
 #define PUBLISH_TOPIC_EVENT "/devices/%s/events"
 #define PUBLISH_TOPIC_STATE "/devices/%s/state"
 #define TEMPERATURE_DATA "{\"temperature\" : %f}"
+#define FEED_COMMAND "\"feed\""
 #define MIN_TEMP 20
 #define OUTPUT_GPIO 5
 
@@ -44,7 +46,7 @@ static int retry_cnt = 0;
 extern const uint8_t private_key_pem_crt_start[] asm("_binary_private_key_pem_start");
 extern const uint8_t private_key_pem_crt_end[] asm("_binary_private_key_pem_end");
 
-char *subscribe_topic_command, *subscribe_topic_config;
+char *subscribe_topic_command, *subscribe_topic_config, *subscribe_topic_command_without_wildcard;
 
 iotc_mqtt_qos_t iotc_example_qos = IOTC_MQTT_QOS_AT_LEAST_ONCE;
 static iotc_timed_task_handle_t delayed_publish_task =
@@ -143,6 +145,18 @@ void iotc_mqttlogic_subscribe_callback(
                 ESP_LOGE(TAG, "update_config_event is not set...");
             }
         }
+        else if(strcmp(subscribe_topic_command_without_wildcard, params->message.topic) == 0) {
+            ESP_LOGI(TAG, "Recieved cmd");
+            if(strcmp(sub_message, FEED_COMMAND) == 0) {
+                ESP_LOGI(TAG, "The cmd is feed");
+                if(m_mqtt_callback.feed_command_event) {
+                    m_mqtt_callback.feed_command_event(); 
+                }
+                else {
+                    ESP_LOGE(TAG, "fetch_telemetry_event is not set...");
+                }
+            }
+        }
         free(sub_message);
     }
 }
@@ -159,6 +173,7 @@ void on_connection_state_changed(iotc_context_handle_t in_context_handle,
         ESP_LOGI(TAG, "connected!");
 
         /* Subscribe to to device's command and config topics. */
+        asprintf(&subscribe_topic_command_without_wildcard, SUBSCRIBE_TOPIC_COMMAND_WITHOUT_WILD_CARD, CONFIG_GIOT_DEVICE_ID);
         asprintf(&subscribe_topic_command, SUBSCRIBE_TOPIC_COMMAND, CONFIG_GIOT_DEVICE_ID);
         ESP_LOGI(TAG, "subscribing to topic: \"%s\"", subscribe_topic_command);
         iotc_subscribe(in_context_handle, subscribe_topic_command, IOTC_MQTT_QOS_AT_LEAST_ONCE,
