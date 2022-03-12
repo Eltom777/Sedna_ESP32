@@ -124,6 +124,12 @@ static void update_device_config_callback(char* new_device_config, size_t buffer
 {
     ESP_LOGI(TAG, "New Config %s", new_device_config);
     ESP_LOGI(TAG, "Buffer size %d", buffer_size);
+
+    //omit string termination char
+    size_t buffer_size_parsing = buffer_size - 1;
+
+    //TODO: parse new device config with coreJSON. Append values to local device config
+    // Add Mutex to protect access to local device config
 }
 
 static void init_hw(void){
