@@ -120,22 +120,23 @@ void iotc_mqttlogic_subscribe_callback(
     IOTC_UNUSED(user_data);
     if (params != NULL && params->message.topic != NULL) {
         ESP_LOGI(TAG, "Subscription Topic: %s", params->message.topic);
-        char *sub_message = (char *)malloc(params->message.temporary_payload_data_length + 1);
+
+        size_t buffer_size = params->message.temporary_payload_data_length + 1;
+        char *sub_message = (char *)malloc(buffer_size);
         if (sub_message == NULL) {
             ESP_LOGE(TAG, "Failed to allocate memory");
             return;
         }
         memcpy(sub_message, params->message.temporary_payload_data, params->message.temporary_payload_data_length);
         sub_message[params->message.temporary_payload_data_length] = '\0';
-        size_t buffer_length = sizeof(sub_message);
 
         ESP_LOGI(TAG, "Message Payload: %s ", sub_message);
-        ESP_LOGI(TAG, "Message size: %d ", buffer_length);
+        ESP_LOGI(TAG, "Message size: %d ", buffer_size);
         if (strcmp(subscribe_topic_config, params->message.topic) == 0) {
     
             if(m_mqtt_callback.update_config_event)
             {
-                m_mqtt_callback.update_config_event(&sub_message, buffer_length);
+                m_mqtt_callback.update_config_event(sub_message, buffer_size);
             }
             else
             {
