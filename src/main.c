@@ -120,9 +120,10 @@ static void enqueue_telemetry(void* pvParameters)
     }    
 }
 
-static void update_device_config(float new_desired_temperature)
+static void update_device_config_callback(char* new_device_config, size_t buffer_size)
 {
-    device_config.desiredTemp = new_desired_temperature;
+    ESP_LOGI(TAG, "New Config %s", new_device_config);
+    ESP_LOGI(TAG, "Buffer size %d", buffer_size);
 }
 
 static void init_hw(void){
@@ -266,7 +267,7 @@ void app_main()
     mqtt_callback_t mqtt_callback = 
     {
         .fetch_telemetry_event = dequeue_telemetry,
-        .update_config_event = update_device_config,
+        .update_config_event = update_device_config_callback,
         .feed_command_event = feed_command_event
     };
     esp_sta_init(mqtt_callback);
