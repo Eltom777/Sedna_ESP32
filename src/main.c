@@ -124,11 +124,8 @@ static void enqueue_telemetry(void* pvParameters)
     }    
 }
 
-static void update_device_config_callback(char* new_device_config, size_t buffer_size)
-{
-    ESP_LOGI(TAG, "New Config %s", new_device_config);
-    ESP_LOGI(TAG, "Buffer size %d", buffer_size);
-
+static void update_device_config_callback(char* new_device_config, size_t buffer_size) {
+    
     //omit string termination char
     size_t buffer_size_parsing = buffer_size - 1;
 
