@@ -1,6 +1,3 @@
 [submodule "common/components/esp-google-iot"]
 	path = common/components/esp-google-iot
 	url = https://github.com/espressif/esp-google-iot.git
-[submodule "common/components/coreJSON"]
-	path = common/components/coreJSON
-	url = https://github.com/FreeRTOS/coreJSON.git
