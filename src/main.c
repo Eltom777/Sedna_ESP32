@@ -4,6 +4,7 @@
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "esp_system.h"
 #include "esp_log.h"
 
@@ -14,6 +15,8 @@
 #include "owb.h"
 #include "owb_rmt.h"
 #include "ds18b20.h"
+
+#include "cJSON.h"
 
 #define app_core 0
 
@@ -66,6 +69,7 @@ typedef struct device_config_t{
     bool waterLeak; //true if water is detected
 } device_config_t;
 static device_config_t device_config;
+static SemaphoreHandle_t device_config_mutex;
 
 typedef enum FSMstates{
         Idle_State,
@@ -128,8 +132,17 @@ static void update_device_config_callback(char* new_device_config, size_t buffer
     //omit string termination char
     size_t buffer_size_parsing = buffer_size - 1;
 
-    //TODO: parse new device config with coreJSON. Append values to local device config
-    // Add Mutex to protect access to local device config
+    cJSON* root = cJSON_ParseWithLength(new_device_config, buffer_size_parsing);
+    if(root != NULL) {
+        char * rendered = cJSON_Print(root);
+        ESP_LOGI(TAG, "%s\n", rendered);
+
+        free(rendered);
+        cJSON_Delete(root);
+    }   
+    else {
+        ESP_LOGE(TAG, "JSON PARSER FAILED");
+    }
 }
 
 static void init_hw(void){
