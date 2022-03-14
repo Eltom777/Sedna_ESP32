@@ -3,7 +3,7 @@
 #include "freertos/queue.h"
 
 typedef float (*fetch_telemetry_event_f)(void);
-typedef void (*update_config_event_f)(float);
+typedef void (*update_config_event_f)(char*, size_t);
 typedef void (*execute_feed_command_event_f)(void);
 
 typedef struct {

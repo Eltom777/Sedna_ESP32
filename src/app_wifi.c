@@ -120,7 +120,9 @@ void iotc_mqttlogic_subscribe_callback(
     IOTC_UNUSED(user_data);
     if (params != NULL && params->message.topic != NULL) {
         ESP_LOGI(TAG, "Subscription Topic: %s", params->message.topic);
-        char *sub_message = (char *)malloc(params->message.temporary_payload_data_length + 1);
+
+        size_t buffer_size = params->message.temporary_payload_data_length + 1;
+        char *sub_message = (char *)malloc(buffer_size);
         if (sub_message == NULL) {
             ESP_LOGE(TAG, "Failed to allocate memory");
             return;
@@ -128,17 +130,13 @@ void iotc_mqttlogic_subscribe_callback(
         memcpy(sub_message, params->message.temporary_payload_data, params->message.temporary_payload_data_length);
         sub_message[params->message.temporary_payload_data_length] = '\0';
 
-        /* TODO: Logic to set device config should happen here*/
         ESP_LOGI(TAG, "Message Payload: %s ", sub_message);
+        ESP_LOGI(TAG, "Message size: %d ", buffer_size);
         if (strcmp(subscribe_topic_config, params->message.topic) == 0) {
-            
-            float value;
-            sscanf(sub_message, "{\"temperatureSetting\": %f}", &value);
-            ESP_LOGI(TAG, "new temperature value: %f", value);
-            
+    
             if(m_mqtt_callback.update_config_event)
             {
-                m_mqtt_callback.update_config_event(value);
+                m_mqtt_callback.update_config_event(sub_message, buffer_size);
             }
             else
             {
@@ -157,7 +155,14 @@ void iotc_mqttlogic_subscribe_callback(
                 }
             }
         }
+        else {
+            ESP_LOGI(TAG, "Message obtained belongs to the following topic %s.\
+                           Device not registered to this topic", params->message.topic);
+        }
         free(sub_message);
+    }
+    else {
+        ESP_LOGI(TAG, "Subscribe callback triggered but iotc_sub_call_params or topic was NULL");
     }
 }
 

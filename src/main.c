@@ -4,6 +4,7 @@
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "esp_system.h"
 #include "esp_log.h"
 
@@ -14,6 +15,8 @@
 #include "owb.h"
 #include "owb_rmt.h"
 #include "ds18b20.h"
+
+#include "cJSON.h"
 
 #define app_core 0
 
@@ -45,27 +48,29 @@ static TaskHandle_t feeding_task_handler;
 static const char *TAG = "CTRL_APP";
 static int relayPower;
 
-typedef struct device_config_t{
+typedef struct device_config_t {
     //temperature system
-    float desiredTemp;
-    float currTemp;
-    //feeder system
-    int feedTime;
-    bool feedNow; //force feed
-    int foodLeft; //feedings remaining
-    //wavermaker system
-    int waveOnTime;
-    int waveOffTime;
-    bool waveForce; //forcing device to stay on/off
-    //lighting system
-    int lightOnTime;
-    int lightOffTime;
-    bool lightForce; //forcing device to stay on/off
-    //water detectors
-    bool waterLevel; //true if water level is low
-    bool waterLeak; //true if water is detected
+    float desired_temp;
+    
+    //light control
+    bool light_force;
+    bool light_auto;
+    int light_intensity;
+    time_t light_on_time;
+    time_t light_off_time;
+    
+    //wave control
+    bool wave_force;
+    bool wave_auto;
+    time_t wave_on_time;
+    time_t wave_off_time;
+
+    //feed control
+    time_t feed_time;
+
 } device_config_t;
 static device_config_t device_config;
+static SemaphoreHandle_t device_config_mutex;
 
 typedef enum FSMstates{
         Idle_State,
@@ -120,9 +125,107 @@ static void enqueue_telemetry(void* pvParameters)
     }    
 }
 
-static void update_device_config(float new_desired_temperature)
-{
-    device_config.desiredTemp = new_desired_temperature;
+/* device_config_mutex must be captured before calling*/
+static void print_device_config() {
+    ESP_LOGI(TAG, "==========device_config==========");
+    ESP_LOGI(TAG, "desired_temp: %f", device_config.desired_temp);
+    ESP_LOGI(TAG, "light_force: %d", device_config.light_force);
+    ESP_LOGI(TAG, "light_auto: %d", device_config.light_auto);
+    ESP_LOGI(TAG, "light_on_time: %ld", device_config.light_on_time);
+    ESP_LOGI(TAG, "light_off_time: %ld", device_config.light_off_time);
+    ESP_LOGI(TAG, "wave_force: %d", device_config.wave_force);
+    ESP_LOGI(TAG, "wave_auto: %d", device_config.wave_auto);
+    ESP_LOGI(TAG, "wave_on_time: %ld", device_config.wave_on_time);
+    ESP_LOGI(TAG, "wave_off_time: %ld", device_config.wave_off_time);
+    ESP_LOGI(TAG, "feed_time: %ld", device_config.feed_time);
+}
+
+static void update_device_config_callback(char* new_device_config, size_t buffer_size) {
+    
+    //omit string termination char
+    size_t buffer_size_parsing = buffer_size - 1;
+
+    cJSON* root = cJSON_ParseWithLength(new_device_config, buffer_size_parsing);
+    if(root == NULL) {
+        ESP_LOGE(TAG, "Json parser failed");
+        return;
+    }
+
+    // Updated sharde device_config
+    xSemaphoreTake(device_config_mutex, portMAX_DELAY);
+    
+    cJSON* attribute;
+    attribute = cJSON_GetObjectItem(root, "desiredTemperature");
+    if(attribute != NULL)
+        device_config.desired_temp = (float) attribute->valuedouble;
+    else
+        ESP_LOGI(TAG, "desired_temperature not set in new config");
+    
+    attribute = cJSON_GetObjectItem(root, "lightForce");
+    if(attribute != NULL)
+        device_config.light_force = cJSON_IsTrue(attribute);
+    else
+        ESP_LOGI(TAG, "lightForce not set in new config");
+
+    attribute = cJSON_GetObjectItem(root, "lightAuto");
+    if(attribute != NULL)
+        device_config.light_auto = cJSON_IsTrue(attribute);
+    else
+        ESP_LOGI(TAG, "lightAuto not set in new config");
+    
+    attribute = cJSON_GetObjectItem(root, "lightIntensity");
+    if(attribute != NULL)
+        device_config.light_intensity = attribute->valueint;
+    else
+        ESP_LOGI(TAG, "lightIntensity not set in new config");
+    
+    attribute = cJSON_GetObjectItem(root, "lightOnTime");
+    if(attribute != NULL)
+        device_config.light_on_time = (time_t) attribute->valueint;
+    else
+        ESP_LOGI(TAG, "lightOnTime not set in new config");
+    
+    attribute = cJSON_GetObjectItem(root, "lightOffTime");
+    if(attribute != NULL)
+        device_config.light_off_time = (time_t) attribute->valueint;
+    else
+        ESP_LOGI(TAG, "lightOffTime not set in new config");
+    
+    attribute = cJSON_GetObjectItem(root, "waveForce");
+    if(attribute != NULL)
+        device_config.wave_force = cJSON_IsTrue(attribute);
+    else
+        ESP_LOGI(TAG, "waveForce not set in new config");
+    
+    attribute = cJSON_GetObjectItem(root, "waveAuto");
+    if(attribute != NULL)
+        device_config.wave_auto = cJSON_IsTrue(attribute);
+    else
+        ESP_LOGI(TAG, "waveAuto not set in new config");
+    
+    attribute = cJSON_GetObjectItem(root, "waveOnTime");
+    if(attribute != NULL)
+        device_config.wave_on_time = (time_t) attribute->valueint;
+    else
+        ESP_LOGI(TAG, "waveOnTime not set in new config");
+    
+    attribute = cJSON_GetObjectItem(root, "waveOffTime");
+    if(attribute != NULL)
+        device_config.wave_off_time = (time_t) attribute->valueint;
+    else
+        ESP_LOGI(TAG, "waveOffTime not set in new config");
+    
+    attribute = cJSON_GetObjectItem(root, "feedTime");
+    if(attribute != NULL)
+        device_config.feed_time = (time_t) attribute->valueint;
+    else
+        ESP_LOGI(TAG, "feedTime not set in new config");
+
+    print_device_config();
+
+    xSemaphoreGive(device_config_mutex);
+    
+    cJSON_Delete(root);
 }
 
 static void init_hw(void){
@@ -182,7 +285,7 @@ static void FSMTempCtrl(void* pvParameters)
     enum FSMstates state = Idle_State;
     for(;;)
     {
-        ESP_LOGI(TAG,"Device Desired Temp: %f" ,device_config->desiredTemp);
+        ESP_LOGI(TAG,"Device Desired Temp: %f" ,device_config->desired_temp);
         switch(state){
             case Idle_State:
                 state = Measure_State;
@@ -190,11 +293,11 @@ static void FSMTempCtrl(void* pvParameters)
             case Measure_State:
                 ESP_LOGI(TAG,"At Measure State");
                 currentTemp = TempRead();
-                if(currentTemp < device_config->desiredTemp){
+                if(currentTemp < device_config->desired_temp){
                     ESP_LOGI(TAG,"Going to Low Temp State");
                     state = Temp_Low_State;
                 }
-                if(currentTemp >= device_config->desiredTemp){
+                if(currentTemp >= device_config->desired_temp){
                     ESP_LOGI(TAG,"Going to High Temp State");
                     state = Temp_High_State;
                 }
@@ -258,7 +361,7 @@ static void feed_fish(void* pvParameters) {
 
 void app_main()
 {
-    device_config.desiredTemp = 17.0;
+    device_config.desired_temp = 17.0;
 
     data_queue = xQueueCreate(queue_size, sizeof(float));  
 
@@ -266,10 +369,12 @@ void app_main()
     mqtt_callback_t mqtt_callback = 
     {
         .fetch_telemetry_event = dequeue_telemetry,
-        .update_config_event = update_device_config,
+        .update_config_event = update_device_config_callback,
         .feed_command_event = feed_command_event
     };
     esp_sta_init(mqtt_callback);
+
+    device_config_mutex = xSemaphoreCreateMutex();
     
     init_hw();
     xTaskCreatePinnedToCore(&FSMTempCtrl, 
