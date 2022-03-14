@@ -130,16 +130,18 @@ static void update_device_config_callback(char* new_device_config, size_t buffer
     size_t buffer_size_parsing = buffer_size - 1;
 
     cJSON* root = cJSON_ParseWithLength(new_device_config, buffer_size_parsing);
-    if(root != NULL) {
-        char * rendered = cJSON_Print(root);
-        ESP_LOGI(TAG, "%s\n", rendered);
-
-        free(rendered);
-        cJSON_Delete(root);
-    }   
-    else {
+    if(root == NULL) {
         ESP_LOGE(TAG, "JSON PARSER FAILED");
+        return;
     }
+
+    char * rendered = cJSON_Print(root);
+    int light = cJSON_GetObjectItem(root, "lightOnTime")->valueint; 
+    ESP_LOGI(TAG, "%s\n", rendered);
+    ESP_LOGI(TAG, "Feed time convertered to int: %d", light);
+
+    free(rendered);
+    cJSON_Delete(root);
 }
 
 static void init_hw(void){
