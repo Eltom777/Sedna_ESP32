@@ -8,8 +8,10 @@
 #include "esp_system.h"
 #include "esp_log.h"
 
-#include "app_wifi.h"
+#include "hw_definition.h"
+#include "gpio_definition.h"
 
+#include "app_wifi.h"
 #include "driver/gpio.h"
 
 #include "owb.h"
@@ -18,36 +20,38 @@
 
 #include "cJSON.h"
 
-#define app_core 0
+/* Global Variables----------------------------------------------------------------------------------------------------------*/
+//ESPI_LOG Tag
+static const char *TAG = "CTRL_APP";
 
+//Com btwn app-wifi cores
 static QueueHandle_t data_queue;
 static int queue_size = 10;
 
-#define GPIO_DS18B20_0 16
-#define DS18B20_RESOLUTION 12
-#define SAMPLE_PERIOD 1000
-
-#define ctrl_core 1
-
-#define RELAY_PIN 4
-#define GPIO_RELAY_PIN_SEL (1ULL << RELAY_PIN)
-
-#define temp_threshold -5.0f
-
+//Temp sub-system
 static DS18B20_Info * ds18b20_info;
 static TickType_t last_wake_time;
 static OneWireBus * owb;
 static owb_rmt_driver_info rmt_driver_info;
 static OneWireBus_ROMCode rom_code;
 static owb_status status;
-
 static float currentTemp;
-
-static TaskHandle_t feeding_task_handler;
-
-static const char *TAG = "CTRL_APP";
 static int relayPower;
 
+typedef enum FSMstates{
+        Idle_State,
+        Measure_State,
+        Temp_Low_State,
+        Temp_High_State,
+        Turn_On_Relay_State,
+        Turn_Off_Relay_State
+} FSMstates;
+
+/*Interupt handlers----------------------------------------------------------------------------------------------------------*/
+static TaskHandle_t feeding_task_handler;
+
+/*Controller Config----------------------------------------------------------------------------------------------------------*/
+//Variables
 typedef struct device_config_t {
     //temperature system
     float desired_temp;
@@ -72,59 +76,7 @@ typedef struct device_config_t {
 static device_config_t device_config;
 static SemaphoreHandle_t device_config_mutex;
 
-typedef enum FSMstates{
-        Idle_State,
-        Measure_State,
-        Temp_Low_State,
-        Temp_High_State,
-        Turn_On_Relay_State,
-        Turn_Off_Relay_State
-} FSMstates;
-
-void feed_command_event() {
-    ESP_LOGI(TAG, "Resuming feeding task...");
-    vTaskResume(feeding_task_handler);
-}
-
-float dequeue_telemetry()
-{
-    float data = temp_threshold;
-    if(data_queue != NULL)
-    {
-        if((int) uxQueueMessagesWaiting(data_queue) > 0)
-        {
-            xQueueReceive(data_queue, &data, (TickType_t)0);
-        }
-        else
-        {
-            ESP_LOGI(TAG, "Telemetry Queue is empty...");
-        }
-    }
-    else
-    {
-        ESP_LOGE(TAG, "Telemetry Queue is not set...");
-    }
-    return data;
-}
-
-static void enqueue_telemetry(void* pvParameters)
-{
-
-    if(data_queue == NULL)
-    {
-        ESP_LOGE(TAG, "Telemetry Queue is not set...");
-        return;
-    }
-
-    for(;;)
-    {
-        ESP_LOGI(TAG, "Queueing the value : %f", currentTemp);
-        xQueueSendToBack(data_queue, &currentTemp, (TickType_t)0);
-
-        vTaskDelay(10000 / portTICK_PERIOD_MS);
-    }    
-}
-
+//Print Variables
 /* device_config_mutex must be captured before calling*/
 static void print_device_config() {
     ESP_LOGI(TAG, "==========device_config==========");
@@ -140,6 +92,7 @@ static void print_device_config() {
     ESP_LOGI(TAG, "feed_time: %ld", device_config.feed_time);
 }
 
+/*Controller Config Updater----------------------------------------------------------------------------------------------------------*/
 static void update_device_config_callback(char* new_device_config, size_t buffer_size) {
     
     //omit string termination char
@@ -228,6 +181,47 @@ static void update_device_config_callback(char* new_device_config, size_t buffer
     cJSON_Delete(root);
 }
 
+/*Ctrler-Wifi core communication----------------------------------------------------------------------------------------------------------*/
+float dequeue_telemetry()
+{
+    float data = temp_threshold;
+    if(data_queue != NULL)
+    {
+        if((int) uxQueueMessagesWaiting(data_queue) > 0)
+        {
+            xQueueReceive(data_queue, &data, (TickType_t)0);
+        }
+        else
+        {
+            ESP_LOGI(TAG, "Telemetry Queue is empty...");
+        }
+    }
+    else
+    {
+        ESP_LOGE(TAG, "Telemetry Queue is not set...");
+    }
+    return data;
+}
+
+static void enqueue_telemetry(void* pvParameters)
+{
+
+    if(data_queue == NULL)
+    {
+        ESP_LOGE(TAG, "Telemetry Queue is not set...");
+        return;
+    }
+
+    for(;;)
+    {
+        ESP_LOGI(TAG, "Queueing the value : %f", currentTemp);
+        xQueueSendToBack(data_queue, &currentTemp, (TickType_t)0);
+
+        vTaskDelay(10000 / portTICK_PERIOD_MS);
+    }    
+}
+
+/*Hardware initialization----------------------------------------------------------------------------------------------------------*/
 static void init_hw(void){
     gpio_config_t io_conf;
     io_conf.mode = GPIO_MODE_INPUT_OUTPUT;
@@ -258,11 +252,26 @@ static void init_hw(void){
     printf("Single device optimisations enabled\n");
     ds18b20_init_solo(ds18b20_info, owb);
     ds18b20_use_crc(ds18b20_info, true); // enable CRC check on all reads
-    ds18b20_set_resolution(ds18b20_info, DS18B20_RESOLUTION);
+    ds18b20_set_resolution(ds18b20_info, DS18B20_RES);
 
     last_wake_time = xTaskGetTickCount();
 }
 
+/*Feeder sub-system----------------------------------------------------------------------------------------------------------*/
+static void feed_fish(void* pvParameters) {
+    for(;;) {
+        vTaskSuspend(NULL);
+        ESP_LOGI(TAG, "Feeding fish...");
+        //TODO: create and call servo control function
+    }
+}
+
+void feed_command_event() {
+    ESP_LOGI(TAG, "Resuming feeding task...");
+    vTaskResume(feeding_task_handler);
+}
+
+/*Temperature sub-system----------------------------------------------------------------------------------------------------------*/
 static float TempRead() {
 
         static float readTemp;
@@ -351,14 +360,30 @@ static void FSMTempCtrl(void* pvParameters)
     }
 }
 
-static void feed_fish(void* pvParameters) {
-    for(;;) {
+/*Lighting sub-system----------------------------------------------------------------------------------------------------------*/
+static void light_control(void* pvParameters) {
+    for(;;){
         vTaskSuspend(NULL);
-        ESP_LOGI(TAG, "Feeding fish...");
-        //TODO: create and call servo control function
+        ESP_LOGI(TAG, "Enter Light Control");
+        device_config_t* device_config =  (device_config_t*) pvParameters;
+        //Check for Auto or Force
+        // ESP_LOGI(TAG, "light_force: %d", device_config.light_force);
+        // ESP_LOGI(TAG, "light_auto: %d", device_config.light_auto);
+        // ESP_LOGI(TAG, "light_on_time: %ld", device_config.light_on_time);
+        // ESP_LOGI(TAG, "light_off_time: %ld", device_config.light_off_time);
+
+        if(device_config->light_auto == true){
+            //check for on time to turn on device_config->light_on_time
+            //check for off time to turn off device_config->light_off_time
+        }else if(device_config->light_auto ==  false && device_config->light_force == true){
+            //turn on lights
+        }else{
+            //turn off lights
+        }
     }
 }
 
+/*main----------------------------------------------------------------------------------------------------------*/
 void app_main()
 {
     device_config.desired_temp = 17.0;
