@@ -48,6 +48,20 @@ typedef enum FSMstates{
         Turn_Off_Relay_State
 } FSMstates;
 
+//Planner sub-system
+enum planner_states_t
+{
+    WAIT_FOR_SET_TIME,
+    CHECK_TIME,
+    SLEEP
+};
+#define LOCAL_TIME_ZONE "EST5EDT,M3.2.0/2,M11.1.0"
+
+// Speed up a sec by 300ms so deadline is not missed
+#define ONE_SEC_SPEED_UP = 700;
+#define ONE_MINUTE_SPEED_UP = 60 * ONE_SEC_SPEED_UP;
+#define ONE_MINUTE = 60000;
+
 //LED brightness settings
 static const rgb_t led_brightness[] = {
     { .r = 0x00, .g = 0x00, .b = 0x00 },
@@ -312,6 +326,92 @@ void feed_command_event() {
     vTaskResume(feeding_task_handler);
 }
 
+
+/*Planner sub-system----------------------------------------------------------------------------------------------------------*/
+static long adjust_time(struct tm* time_of_task)
+{
+    long milis_of_exec_time, milis_of_current_time;
+    long milis_to_wait;
+
+    gettimeofday(&time_now, LOCAL_TIME_ZONE);
+    localtime_r(&time_now.tv_sec, &timeinfo);
+
+    milis_of_current_time = (((timeinfo.tm_hour * 60) + timeinfo.tm_min) * 60 + timeinfo.tm_sec) * 1000;
+    milis_of_exec_time = (((time_of_task->tm_hour * 60) + time_of_task->tm_min) * 60 + time_of_task->tm_sec) * 1000;
+    milis_to_wait=(milis_of_exec_time-milis_of_current_time>0) ? (milis_of_exec_time-milis_of_current_time) : (milis_of_exec_time-milis_of_current_time+(24*3600*1000));
+
+    return milis_to_wait;
+}
+
+static void planner_task(void *pvParameters)
+{
+    long milis_to_wait;
+    enum planner_states_t planner_state = CHECK_TIME;
+    for(;;)
+    {
+        switch (planner_state) 
+        {
+            case WAIT_FOR_SET_TIME:
+                vTaskSuspend(NULL);
+                planner_state = CHECK_TIME;
+            break;
+            case CHECK_TIME:
+                xSemaphoreTake(device_config_mutex, portMAX_DELAY);
+                if(!device_config.light_force && device_config.light_auto) {
+                    milis_to_wait = adjust_time(&device_config.light_on_time);
+                    if(milis_to_wait < ONE_MINUTE)
+                    {
+                        //TODO: Turn lights on
+                        ESP_LOGI(TAG, "Turning light on");
+
+                    }
+
+                    milis_to_wait = adjust_time(&device_config.light_off_time);
+                    if(milis_to_wait < ONE_MINUTE)
+                    {
+                        //TODO: Turn lights off
+                        ESP_LOGI(TAG, "Turning light off");
+                    }
+                }
+                
+                if(!device_config.wave_force && device_config.wave_auto) {
+                    milis_to_wait = adjust_time(&device_config.wave_on_time);
+                    if(milis_to_wait < ONE_MINUTE)
+                    {
+                        //TODO: Turn wave on
+                        ESP_LOGI(TAG, "Turning wave maker on");
+
+                    }
+
+                    milis_to_wait = adjust_time(&device_config.wave_off_time);
+                    if(milis_to_wait < ONE_MINUTE)
+                    {
+                        //TODO: Turn wave off
+                        ESP_LOGI(TAG, "Turning wave maker off");
+                    }
+                }
+
+                if(device_config.feed_auto) {
+                    milis_to_wait = adjust_time(&device_config.feed_time);
+                    if(milis_to_wait < ONE_MINUTE)
+                    {
+                        //TODO: feed fish
+                        ESP_LOGI(TAG, "Feeding fish");
+                    }
+                }
+
+                planner_state = SLEEP;
+                xSemaphoreGive(device_config_mutex);
+            break;
+            case SLEEP:
+                planner_state = CHECK;
+                ESP_LOGI(TAG, "sleeping");
+                vTaskDelay(ONE_MINUTE_SPEED_UP / portTICK_RATE_MS);
+            break;
+        }  
+    } 
+}
+
 /*Temperature sub-system----------------------------------------------------------------------------------------------------------*/
 static float TempRead() {
 
@@ -477,6 +577,15 @@ void app_main()
                             6, 
                             &float_switch_handler, 
                             ctrl_core);
+
+    /* Create a task to check time and trigger control */
+    xTaskCreatePinnedToCore(&time_task,         
+                            "Time Task",        
+                            mqtt_task_stack,    
+                            NULL,               
+                            5,                  
+                            NULL,               
+                            1);         
 
     ESP_LOGI(TAG, "Program quits");
 } 
