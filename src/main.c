@@ -364,7 +364,6 @@ static void planner_task(void *pvParameters)
 {
     long milis_to_wait;
     enum planner_states_t planner_state = WAIT_FOR_SET_TIME;
-    ESP_LOGI(TAG,"Start of Planner State Machine");
     for(;;)
     {
         switch (planner_state) 
@@ -606,8 +605,6 @@ void app_main()
                             &float_switch_handler, 
                             ctrl_core);
     
-
-    ESP_LOGI(TAG,"Starting Planner task");
     /* Create a task to check time and trigger control */ 
     xTaskCreatePinnedToCore(&planner_task,         
                             "Planner Task",        
