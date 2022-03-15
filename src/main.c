@@ -19,6 +19,7 @@
 #include "ds18b20.h"
 
 #include "cJSON.h"
+#include <sys/time.h>
 #include "led_strip.h"
 
 /* Global Variables----------------------------------------------------------------------------------------------------------*/
@@ -49,18 +50,23 @@ typedef enum FSMstates{
 } FSMstates;
 
 //Planner sub-system
+#define LOCAL_TIME_ZONE "EST5EDT,M3.2.0/2,M11.1.0"
+#define ONE_SEC_SPEED_UP 700 // Speed up a sec by 300ms so deadline is not missed
+#define ONE_MINUTE 60000L
+
 enum planner_states_t
 {
     WAIT_FOR_SET_TIME,
     CHECK_TIME,
     SLEEP
 };
-#define LOCAL_TIME_ZONE "EST5EDT,M3.2.0/2,M11.1.0"
+static TaskHandle_t planner_task_handler;
+static int ONE_MINUTE_SPEED_UP = 60 * ONE_SEC_SPEED_UP;
 
-// Speed up a sec by 300ms so deadline is not missed
-#define ONE_SEC_SPEED_UP = 700;
-#define ONE_MINUTE_SPEED_UP = 60 * ONE_SEC_SPEED_UP;
-#define ONE_MINUTE = 60000;
+static struct timeval time_now = {0};
+static struct tm timeinfo_now = {0};
+
+static struct tm timeinfo_planner_task = {0};
 
 //LED brightness settings
 static const rgb_t led_brightness[] = {
@@ -132,6 +138,7 @@ static void print_device_config() {
     ESP_LOGI(TAG, "wave_auto: %d", device_config.wave_auto);
     ESP_LOGI(TAG, "wave_on_time: %ld", device_config.wave_on_time);
     ESP_LOGI(TAG, "wave_off_time: %ld", device_config.wave_off_time);
+    ESP_LOGI(TAG, "feed_auto: %d", device_config.feed_auto);
     ESP_LOGI(TAG, "feed_time: %ld", device_config.feed_time);
 }
 
@@ -213,7 +220,7 @@ static void update_device_config_callback(char* new_device_config, size_t buffer
 
     attribute = cJSON_GetObjectItem(root, "feedAuto");
     if(attribute != NULL)
-        device_config.feed_auto = cJSON_IsTrue(attribute);;
+        device_config.feed_auto = cJSON_IsTrue(attribute);
     else
         ESP_LOGI(TAG, "feedTime not set in new config");
     
@@ -224,6 +231,8 @@ static void update_device_config_callback(char* new_device_config, size_t buffer
         ESP_LOGI(TAG, "feedTime not set in new config");
 
     print_device_config();
+
+    vTaskResume(planner_task_handler);
 
     xSemaphoreGive(device_config_mutex);
     
@@ -335,16 +344,17 @@ void feed_command_event() {
 
 
 /*Planner sub-system----------------------------------------------------------------------------------------------------------*/
-static long adjust_time(struct tm* time_of_task)
+static long adjust_time(time_t* time_of_task)
 {
     long milis_of_exec_time, milis_of_current_time;
     long milis_to_wait;
 
     gettimeofday(&time_now, LOCAL_TIME_ZONE);
-    localtime_r(&time_now.tv_sec, &timeinfo);
+    localtime_r(&time_now.tv_sec, &timeinfo_now);
+    localtime_r(time_of_task, &timeinfo_planner_task);
 
-    milis_of_current_time = (((timeinfo.tm_hour * 60) + timeinfo.tm_min) * 60 + timeinfo.tm_sec) * 1000;
-    milis_of_exec_time = (((time_of_task->tm_hour * 60) + time_of_task->tm_min) * 60 + time_of_task->tm_sec) * 1000;
+    milis_of_current_time = (((timeinfo_now.tm_hour * 60) + timeinfo_now.tm_min) * 60 + timeinfo_now.tm_sec) * 1000;
+    milis_of_exec_time = (((timeinfo_planner_task.tm_hour * 60) + timeinfo_planner_task.tm_min) * 60 + timeinfo_planner_task.tm_sec) * 1000;
     milis_to_wait=(milis_of_exec_time-milis_of_current_time>0) ? (milis_of_exec_time-milis_of_current_time) : (milis_of_exec_time-milis_of_current_time+(24*3600*1000));
 
     return milis_to_wait;
@@ -353,12 +363,14 @@ static long adjust_time(struct tm* time_of_task)
 static void planner_task(void *pvParameters)
 {
     long milis_to_wait;
-    enum planner_states_t planner_state = CHECK_TIME;
+    enum planner_states_t planner_state = WAIT_FOR_SET_TIME;
+    ESP_LOGI(TAG,"Start of Planner State Machine");
     for(;;)
     {
         switch (planner_state) 
         {
             case WAIT_FOR_SET_TIME:
+                ESP_LOGI(TAG, "Waiting for config to be set.");
                 vTaskSuspend(NULL);
                 planner_state = CHECK_TIME;
             break;
@@ -366,44 +378,53 @@ static void planner_task(void *pvParameters)
                 xSemaphoreTake(device_config_mutex, portMAX_DELAY);
                 if(!device_config.light_force && device_config.light_auto) {
                     milis_to_wait = adjust_time(&device_config.light_on_time);
-                    if(milis_to_wait < ONE_MINUTE)
-                    {
+                    if(milis_to_wait < ONE_MINUTE) {
                         //TODO: Turn lights on
                         ESP_LOGI(TAG, "Turning light on");
-
+                    }
+                    else {
+                        ESP_LOGI(TAG, "Turning light on in %ld milisec", milis_to_wait);
                     }
 
                     milis_to_wait = adjust_time(&device_config.light_off_time);
-                    if(milis_to_wait < ONE_MINUTE)
-                    {
+                    if(milis_to_wait < ONE_MINUTE) {
                         //TODO: Turn lights off
                         ESP_LOGI(TAG, "Turning light off");
+                    }
+                    else {
+                        ESP_LOGI(TAG, "Turning light off in %ld milisec", milis_to_wait);
                     }
                 }
                 
                 if(!device_config.wave_force && device_config.wave_auto) {
                     milis_to_wait = adjust_time(&device_config.wave_on_time);
-                    if(milis_to_wait < ONE_MINUTE)
-                    {
+                    if(milis_to_wait < ONE_MINUTE) {
                         //TODO: Turn wave on
                         ESP_LOGI(TAG, "Turning wave maker on");
 
                     }
+                    else {
+                        ESP_LOGI(TAG, "Turning wave maker on in %ld milisec", milis_to_wait);
+                    }
 
                     milis_to_wait = adjust_time(&device_config.wave_off_time);
-                    if(milis_to_wait < ONE_MINUTE)
-                    {
+                    if(milis_to_wait < ONE_MINUTE) {
                         //TODO: Turn wave off
                         ESP_LOGI(TAG, "Turning wave maker off");
+                    }
+                    else {
+                        ESP_LOGI(TAG, "Turning wave maker off in %ld milisec", milis_to_wait);
                     }
                 }
 
                 if(device_config.feed_auto) {
                     milis_to_wait = adjust_time(&device_config.feed_time);
-                    if(milis_to_wait < ONE_MINUTE)
-                    {
+                    if(milis_to_wait < ONE_MINUTE) {
                         //TODO: feed fish
                         ESP_LOGI(TAG, "Feeding fish");
+                    }
+                    else {
+                        ESP_LOGI(TAG, "feeding fish in %ld milisec", milis_to_wait);
                     }
                 }
 
@@ -411,7 +432,7 @@ static void planner_task(void *pvParameters)
                 xSemaphoreGive(device_config_mutex);
             break;
             case SLEEP:
-                planner_state = CHECK;
+                planner_state = CHECK_TIME;
                 ESP_LOGI(TAG, "sleeping");
                 vTaskDelay(ONE_MINUTE_SPEED_UP / portTICK_RATE_MS);
             break;
@@ -576,7 +597,7 @@ void app_main()
                             &feeding_task_handler, 
                             ctrl_core);
 
-    /* Create a task to check float switch trigger. */
+    /* Create a task to check float switch trigger.*/ 
     xTaskCreatePinnedToCore(&floatSwitchTask, 
                             "Float Switch Triggered.", 
                             configMINIMAL_STACK_SIZE,
@@ -584,15 +605,17 @@ void app_main()
                             6, 
                             &float_switch_handler, 
                             ctrl_core);
+    
 
-    /* Create a task to check time and trigger control */
-    xTaskCreatePinnedToCore(&time_task,         
-                            "Time Task",        
-                            mqtt_task_stack,    
+    ESP_LOGI(TAG,"Starting Planner task");
+    /* Create a task to check time and trigger control */ 
+    xTaskCreatePinnedToCore(&planner_task,         
+                            "Planner Task",        
+                            3*configMINIMAL_STACK_SIZE,    
                             NULL,               
                             5,                  
-                            NULL,               
-                            1);         
-
+                            &planner_task_handler,               
+                            ctrl_core);
+            
     ESP_LOGI(TAG, "Program quits");
 } 
