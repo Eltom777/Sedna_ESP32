@@ -112,6 +112,7 @@ typedef struct device_config_t {
     time_t wave_off_time;
 
     //feed control
+    bool feed_auto;
     time_t feed_time;
 
 } device_config_t;
@@ -209,6 +210,12 @@ static void update_device_config_callback(char* new_device_config, size_t buffer
         device_config.wave_off_time = (time_t) attribute->valueint;
     else
         ESP_LOGI(TAG, "waveOffTime not set in new config");
+
+    attribute = cJSON_GetObjectItem(root, "feedAuto");
+    if(attribute != NULL)
+        device_config.feed_auto = cJSON_IsTrue(attribute);;
+    else
+        ESP_LOGI(TAG, "feedTime not set in new config");
     
     attribute = cJSON_GetObjectItem(root, "feedTime");
     if(attribute != NULL)
