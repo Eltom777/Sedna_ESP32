@@ -19,6 +19,7 @@
 #include "ds18b20.h"
 
 #include "cJSON.h"
+#include "led_strip.h"
 
 /* Global Variables----------------------------------------------------------------------------------------------------------*/
 //ESPI_LOG Tag
@@ -47,8 +48,35 @@ typedef enum FSMstates{
         Turn_Off_Relay_State
 } FSMstates;
 
+//LED brightness settings
+static const rgb_t led_brightness[] = {
+    { .r = 0x00, .g = 0x00, .b = 0x00 },
+    { .r = 0x01, .g = 0x01, .b = 0x01 },
+    { .r = 0x03, .g = 0x03, .b = 0x03 },
+    { .r = 0x05, .g = 0x05, .b = 0x05 },
+    { .r = 0x06, .g = 0x06, .b = 0x06 },
+    { .r = 0x08, .g = 0x08, .b = 0x08 },
+    { .r = 0x0a, .g = 0x0a, .b = 0x0a },
+    { .r = 0x0c, .g = 0x0c, .b = 0x0c },
+    { .r = 0x0e, .g = 0x0e, .b = 0x0e },
+    { .r = 0x0f, .g = 0x0f, .b = 0x0f }
+};
+#define COLORS_TOTAL (sizeof(led_brightness) / sizeof(rgb_t))
+
+led_strip_t strip = {
+        .type = LED_TYPE,
+        .length = CONFIG_LED_STRIP_LEN,
+        .gpio = GPIO_LED_LIGHT,
+        .buf = NULL,
+        #ifdef LED_STRIP_BRIGHTNESS
+        .brightness = 255,
+        #endif
+};
+
 /*Interupt handlers----------------------------------------------------------------------------------------------------------*/
 static TaskHandle_t feeding_task_handler;
+TaskHandle_t float_switch_handler = NULL;
+void switch_handler(void*);
 
 /*Controller Config----------------------------------------------------------------------------------------------------------*/
 //Variables
@@ -223,20 +251,20 @@ static void enqueue_telemetry(void* pvParameters)
 
 /*Hardware initialization----------------------------------------------------------------------------------------------------------*/
 static void init_hw(void){
+
+    //Temp probe
     gpio_config_t io_conf;
     io_conf.mode = GPIO_MODE_INPUT_OUTPUT;
-    io_conf.pin_bit_mask = GPIO_RELAY_PIN_SEL;
+    io_conf.pin_bit_mask = GPIO_HEATER_RELAY_PIN_SEL;
     io_conf.intr_type = GPIO_INTR_DISABLE;
     io_conf.pull_down_en = 0;
     io_conf.pull_up_en = 0;
     gpio_config(&io_conf);
-
-    gpio_set_level(RELAY_PIN, 0);
+    gpio_set_level(GPIO_HEATER_RELAY, 0);
 
     // Create a 1-Wire bus, using the RMT timeslot driver
     owb = owb_rmt_initialize(&rmt_driver_info, GPIO_DS18B20_0, RMT_CHANNEL_1, RMT_CHANNEL_0);
     owb_use_crc(owb, true); // enable CRC check for ROM code
-
     // For a single device only:
     status = owb_read_rom(owb, &rom_code);
     if (status == OWB_STATUS_OK){
@@ -255,6 +283,19 @@ static void init_hw(void){
     ds18b20_set_resolution(ds18b20_info, DS18B20_RES);
 
     last_wake_time = xTaskGetTickCount();
+
+    //Float switch
+    io_conf.mode = GPIO_MODE_INPUT;
+    io_conf.pin_bit_mask = GPIO_FLOAT_SWITCH;
+    io_conf.intr_type = GPIO_INTR_NEGEDGE;
+    io_conf.pull_up_en = 1;
+    gpio_config(&io_conf);
+
+    gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
+    gpio_isr_handler_add(GPIO_FLOAT_SWITCH, switch_handler, NULL);
+
+    //LED strip
+    ESP_ERROR_CHECK(led_strip_init(&strip));
 }
 
 /*Feeder sub-system----------------------------------------------------------------------------------------------------------*/
@@ -313,7 +354,7 @@ static void FSMTempCtrl(void* pvParameters)
             break;
             case Temp_Low_State:
                 ESP_LOGI(TAG,"At Low Temp State");
-                relayPower = gpio_get_level(RELAY_PIN);
+                relayPower = gpio_get_level(GPIO_HEATER_RELAY);
                 if(relayPower == 1)
                 {
                     ESP_LOGI(TAG,"Going to Turn Relay On State");
@@ -327,7 +368,7 @@ static void FSMTempCtrl(void* pvParameters)
             break;
             case Temp_High_State:
                 ESP_LOGI(TAG,"At High Temp State");
-                relayPower = gpio_get_level(RELAY_PIN);
+                relayPower = gpio_get_level(GPIO_HEATER_RELAY);
                 if(relayPower ==  0)
                 {
                     ESP_LOGI(TAG,"Going to Turn Relay Off State");
@@ -341,17 +382,17 @@ static void FSMTempCtrl(void* pvParameters)
             break;
             case Turn_On_Relay_State:
                 ESP_LOGI(TAG,"At Turn Relay On State");
-                gpio_set_level(RELAY_PIN, 0);
+                gpio_set_level(GPIO_HEATER_RELAY, 0);
                 ESP_LOGI(TAG,"Relay is On!");
-                ESP_LOGI(TAG,"Relay State %i" ,gpio_get_level(RELAY_PIN));
+                ESP_LOGI(TAG,"Relay State %i" ,gpio_get_level(GPIO_HEATER_RELAY));
                 ESP_LOGI(TAG,"Going to Measure State.");
                 state = Measure_State;
             break;
             case Turn_Off_Relay_State:
                 ESP_LOGI(TAG,"At Turn Relay Off State");
-                gpio_set_level(RELAY_PIN, 1);
+                gpio_set_level(GPIO_HEATER_RELAY, 1);
                 ESP_LOGI(TAG,"Relay is Off!");
-                ESP_LOGI(TAG,"Relay State %i" ,gpio_get_level(RELAY_PIN));
+                ESP_LOGI(TAG,"Relay State %i" ,gpio_get_level(GPIO_HEATER_RELAY));
                 ESP_LOGI(TAG,"Going to Measure State.");
                 state = Measure_State;
             break;
@@ -361,26 +402,26 @@ static void FSMTempCtrl(void* pvParameters)
 }
 
 /*Lighting sub-system----------------------------------------------------------------------------------------------------------*/
-static void light_control(void* pvParameters) {
+static void set_light(int brightness) {
+    //birghtness is from 0-10 increments of 0.5
+    ESP_ERROR_CHECK(led_strip_fill(&strip, 0, strip.length, led_brightness[brightness]));
+    ESP_ERROR_CHECK(led_strip_flush(&strip));
+}
+
+/*Float switch sub-system----------------------------------------------------------------------------------------------------------*/
+void floatSwitchTask (void *p){
     for(;;){
         vTaskSuspend(NULL);
-        ESP_LOGI(TAG, "Enter Light Control");
-        device_config_t* device_config =  (device_config_t*) pvParameters;
-        //Check for Auto or Force
-        // ESP_LOGI(TAG, "light_force: %d", device_config.light_force);
-        // ESP_LOGI(TAG, "light_auto: %d", device_config.light_auto);
-        // ESP_LOGI(TAG, "light_on_time: %ld", device_config.light_on_time);
-        // ESP_LOGI(TAG, "light_off_time: %ld", device_config.light_off_time);
-
-        if(device_config->light_auto == true){
-            //check for on time to turn on device_config->light_on_time
-            //check for off time to turn off device_config->light_off_time
-        }else if(device_config->light_auto ==  false && device_config->light_force == true){
-            //turn on lights
-        }else{
-            //turn off lights
-        }
+        ESP_LOGI(TAG, "Float Switch triggered!");
+        //TODO: create and call send data function to cloud more like setting variable
     }
+}
+
+void switch_handler(void *arg){
+    BaseType_t checkIfYieldRequired;
+    checkIfYieldRequired = xTaskResumeFromISR(float_switch_handler);
+    vPortEvaluateYieldFromISR(checkIfYieldRequired);
+    //Send data to cloud
 }
 
 /*main----------------------------------------------------------------------------------------------------------*/
@@ -427,7 +468,15 @@ void app_main()
                             6, 
                             &feeding_task_handler, 
                             ctrl_core);
-    
+
+    /* Create a task to check float switch trigger. */
+    xTaskCreatePinnedToCore(&floatSwitchTask, 
+                            "Float Switch Triggered.", 
+                            configMINIMAL_STACK_SIZE,
+                            NULL, 
+                            6, 
+                            &float_switch_handler, 
+                            ctrl_core);
 
     ESP_LOGI(TAG, "Program quits");
 } 
