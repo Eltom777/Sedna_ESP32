@@ -20,7 +20,7 @@
 
 #include "cJSON.h"
 #include <sys/time.h>
-#include "led_strip.h"
+// #include "led_strip.h"
 
 /* Global Variables----------------------------------------------------------------------------------------------------------*/
 //ESPI_LOG Tag
@@ -68,30 +68,30 @@ static struct tm timeinfo_now = {0};
 
 static struct tm timeinfo_planner_task = {0};
 
-//LED brightness settings
-static const rgb_t led_brightness[] = {
-    { .r = 0x00, .g = 0x00, .b = 0x00 },
-    { .r = 0x01, .g = 0x01, .b = 0x01 },
-    { .r = 0x03, .g = 0x03, .b = 0x03 },
-    { .r = 0x05, .g = 0x05, .b = 0x05 },
-    { .r = 0x06, .g = 0x06, .b = 0x06 },
-    { .r = 0x08, .g = 0x08, .b = 0x08 },
-    { .r = 0x0a, .g = 0x0a, .b = 0x0a },
-    { .r = 0x0c, .g = 0x0c, .b = 0x0c },
-    { .r = 0x0e, .g = 0x0e, .b = 0x0e },
-    { .r = 0x0f, .g = 0x0f, .b = 0x0f }
-};
-#define COLORS_TOTAL (sizeof(led_brightness) / sizeof(rgb_t))
+// //LED brightness settings
+// static const rgb_t led_brightness[] = {
+//     { .r = 0x00, .g = 0x00, .b = 0x00 },
+//     { .r = 0x01, .g = 0x01, .b = 0x01 },
+//     { .r = 0x03, .g = 0x03, .b = 0x03 },
+//     { .r = 0x05, .g = 0x05, .b = 0x05 },
+//     { .r = 0x06, .g = 0x06, .b = 0x06 },
+//     { .r = 0x08, .g = 0x08, .b = 0x08 },
+//     { .r = 0x0a, .g = 0x0a, .b = 0x0a },
+//     { .r = 0x0c, .g = 0x0c, .b = 0x0c },
+//     { .r = 0x0e, .g = 0x0e, .b = 0x0e },
+//     { .r = 0x0f, .g = 0x0f, .b = 0x0f }
+// };
+// #define COLORS_TOTAL (sizeof(led_brightness) / sizeof(rgb_t))
 
-led_strip_t strip = {
-        .type = LED_TYPE,
-        .length = CONFIG_LED_STRIP_LEN,
-        .gpio = GPIO_LED_LIGHT,
-        .buf = NULL,
-        #ifdef LED_STRIP_BRIGHTNESS
-        .brightness = 255,
-        #endif
-};
+// led_strip_t strip = {
+//         .type = LED_TYPE,
+//         .length = CONFIG_LED_STRIP_LEN,
+//         .gpio = GPIO_LED_LIGHT,
+//         .buf = NULL,
+//         #ifdef LED_STRIP_BRIGHTNESS
+//         .brightness = 255,
+//         #endif
+// };
 
 /*Interupt handlers----------------------------------------------------------------------------------------------------------*/
 static TaskHandle_t feeding_task_handler;
@@ -325,7 +325,7 @@ static void init_hw(void){
     gpio_isr_handler_add(GPIO_FLOAT_SWITCH, switch_handler, NULL);
 
     //LED strip
-    ESP_ERROR_CHECK(led_strip_init(&strip));
+    //ESP_ERROR_CHECK(led_strip_init(&strip));
 }
 
 /*Feeder sub-system----------------------------------------------------------------------------------------------------------*/
@@ -532,8 +532,8 @@ static void FSMTempCtrl(void* pvParameters)
 /*Lighting sub-system----------------------------------------------------------------------------------------------------------*/
 static void set_light(int brightness) {
     //birghtness is from 0-10 increments of 0.5
-    ESP_ERROR_CHECK(led_strip_fill(&strip, 0, strip.length, led_brightness[brightness]));
-    ESP_ERROR_CHECK(led_strip_flush(&strip));
+    //ESP_ERROR_CHECK(led_strip_fill(&strip, 0, strip.length, led_brightness[brightness]));
+    //ESP_ERROR_CHECK(led_strip_flush(&strip));
 }
 
 /*Float switch sub-system----------------------------------------------------------------------------------------------------------*/
