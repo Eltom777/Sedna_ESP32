@@ -312,10 +312,10 @@ static void init_hw(void){
     gpio_config(&io_conf);
     gpio_set_level(GPIO_HEATER_RELAY, 0);
 
-    //Temp relay
+    //Wave relay
     io_conf.pin_bit_mask = GPIO_WAVE_RELAY_PIN_SEL;
     gpio_config(&io_conf);
-    gpio_set_level(GPIO_HEATER_RELAY, 0);
+    gpio_set_level(GPIO_WAVE_RELAY, 0);
 
     //Temp probe
     // Create a 1-Wire bus, using the RMT timeslot driver
@@ -342,7 +342,7 @@ static void init_hw(void){
 
     //Float switch
     io_conf.mode = GPIO_MODE_INPUT;
-    io_conf.intr_type = GPIO_INTR_POSEDGE;
+    io_conf.intr_type = GPIO_INTR_NEGEDGE;
     io_conf.pull_up_en = 1;
     io_conf.pin_bit_mask = GPIO_FLOAT_SWITCH_SEL;
     gpio_config(&io_conf);
@@ -358,7 +358,7 @@ static void init_hw(void){
     //LED strip
     led_strip_install();
     ESP_ERROR_CHECK(led_strip_init(&strip));
-    ESP_ERROR_CHECK(led_strip_fill(&strip, 0, strip.length, led_brightness[0]));
+    ESP_ERROR_CHECK(led_strip_fill(&strip, 0, strip.length, led_brightness[1]));
     ESP_ERROR_CHECK(led_strip_flush(&strip));
     ESP_LOGI(TAG, "Exit HW INIT");
 }
@@ -469,14 +469,25 @@ static void planner_task(void *pvParameters)
                     }
                 }else if(device_config.wave_force){
                     ESP_LOGI(TAGWAVE, "Forcing wave maker on");
-                    gpio_set_level(GPIO_WAVE_RELAY, 0);
-                    ESP_LOGI(TAGWAVE,"Wave Relay is On!");
-                    ESP_LOGI(TAGWAVE,"Wave Relay State %i" ,gpio_get_level(GPIO_WAVE_RELAY));
+                    if(gpio_get_level(GPIO_WAVE_RELAY) == 1){
+                        gpio_set_level(GPIO_WAVE_RELAY, 0);
+                        ESP_LOGI(TAGWAVE,"Wave Relay is On!");
+                        ESP_LOGI(TAGWAVE,"Wave Relay State %i" ,gpio_get_level(GPIO_WAVE_RELAY));
+                    }else{
+                        ESP_LOGI(TAGWAVE,"Wave Relay already On!");
+                        ESP_LOGI(TAGWAVE,"Wave Relay State %i" ,gpio_get_level(GPIO_WAVE_RELAY));
+                    }
+                
                 }else{
                     ESP_LOGI(TAG, "Forcing wave maker off");
-                    gpio_set_level(GPIO_WAVE_RELAY, 1);
-                    ESP_LOGI(TAGWAVE,"Wave Relay is Off!");
-                    ESP_LOGI(TAGWAVE,"Wave Relay State %i" ,gpio_get_level(GPIO_WAVE_RELAY));
+                    if(gpio_get_level(GPIO_WAVE_RELAY) == 0){
+                        gpio_set_level(GPIO_WAVE_RELAY, 1);
+                        ESP_LOGI(TAGWAVE,"Wave Relay is Off!");
+                        ESP_LOGI(TAGWAVE,"Wave Relay State %i" ,gpio_get_level(GPIO_WAVE_RELAY));
+                    }else{
+                        ESP_LOGI(TAGWAVE,"Wave Relay already Off!");
+                        ESP_LOGI(TAGWAVE,"Wave Relay State %i" ,gpio_get_level(GPIO_WAVE_RELAY));
+                    }
                 }
 
                 //set feeder state
