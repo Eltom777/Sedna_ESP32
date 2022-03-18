@@ -269,6 +269,7 @@ static void enqueue_telemetry(void* pvParameters)
 
     for(;;)
     {
+        vTaskDelay(30000 / portTICK_PERIOD_MS);
         ESP_LOGI(TAG, "Queueing the value : %f", currentTemp);
         xSemaphoreTake(device_config_mutex, portMAX_DELAY);
 
@@ -277,7 +278,6 @@ static void enqueue_telemetry(void* pvParameters)
         xQueueSendToBack(data_queue, &device_telemetry, (TickType_t)0 );
         
         xSemaphoreGive(&device_config_mutex);
-        vTaskDelay(30000 / portTICK_PERIOD_MS);
     }    
 }
 
