@@ -29,7 +29,7 @@
 #define SUBSCRIBE_TOPIC_CONFIG "/devices/%s/config"
 #define PUBLISH_TOPIC_EVENT "/devices/%s/events"
 #define PUBLISH_TOPIC_STATE "/devices/%s/state"
-#define TELEMETRY_DATA "{\"currentTemperature\" : %lf, \"foodLeft\" : %d, \"lowLevelSwitch\" : %d, \"waterLeak\", %d}"
+#define TELEMETRY_DATA "{\"currentTemperature\" : %f, \"foodLeft\" : %d, \"lowLevelSwitch\" : %d, \"waterLeak\", %d}"
 #define FEED_COMMAND "\"feed\""
 #define MIN_TEMP 20
 #define OUTPUT_GPIO 5
@@ -117,10 +117,10 @@ void publish_telemetry_event(iotc_context_handle_t context_handle,
     asprintf(&publish_topic, PUBLISH_TOPIC_EVENT, CONFIG_GIOT_DEVICE_ID);
     char *publish_message = NULL;
     asprintf(&publish_message, TELEMETRY_DATA, 
-             &telemtry_message.device_telemetry.current_temp,
-             &telemtry_message.device_telemetry.food_count, 
-             &telemtry_message.low_level_switch, 
-             &telemtry_message.water_leak);
+             telemtry_message.device_telemetry.current_temp,
+             telemtry_message.device_telemetry.food_count, 
+             telemtry_message.low_level_switch, 
+             telemtry_message.water_leak);
     ESP_LOGI(TAG, "publishing msg \"%s\" to topic: \"%s\"", publish_message, publish_topic);
 
     iotc_publish(context_handle, publish_topic, publish_message,

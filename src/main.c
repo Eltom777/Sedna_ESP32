@@ -38,7 +38,7 @@ static int queue_size = 3;
 
 //ISR Queues
 static xQueueHandle float_switch_ISR_queue;
-static xQueueHandle water_level_ISR_queue;
+static xQueueHandle liquid_sensor_ISR_queue;
 
 //Temp sub-system variables
 static DS18B20_Info * ds18b20_info;
@@ -306,28 +306,6 @@ static bool dequeue_floatSW_notification_queue(void* pvParameters)
     {
         if((int) uxQueueMessagesWaiting(data_queue) > 0)
         {
-            xQueueReceiveFromISR(water_level_ISR_queue, &data, (TickType_t)0);
-        }
-        else
-        {
-            ESP_LOGI(TAG, "water level ISR queue is empty...");
-        }
-    }
-    else
-    {
-        ESP_LOGE(TAG, "water level ISR queue is not set...");
-    }
-    return data;   
-}
-
-static bool dequeue_waterlvl_notification_queue(void* pvParameters)
-{
-
-    bool data = false;
-    if(data_queue != NULL)
-    {
-        if((int) uxQueueMessagesWaiting(data_queue) > 0)
-        {
             xQueueReceiveFromISR(float_switch_ISR_queue, &data, (TickType_t)0);
         }
         else
@@ -342,16 +320,40 @@ static bool dequeue_waterlvl_notification_queue(void* pvParameters)
     return data;   
 }
 
+static bool dequeue_lsensor_notification_queue(void* pvParameters)
+{
+
+    bool data = false;
+    if(data_queue != NULL)
+    {
+        if((int) uxQueueMessagesWaiting(data_queue) > 0)
+        {
+            xQueueReceiveFromISR(liquid_sensor_ISR_queue, &data, (TickType_t)0);
+        }
+        else
+        {
+            ESP_LOGI(TAG, "Liquid sensor ISR queue is empty...");
+        }
+    }
+    else
+    {
+        ESP_LOGE(TAG, "Liquid sensor ISR queue is not set...");
+    }
+    return data;   
+}
+
 /*ISR Handler----------------------------------------------------------------------------------------------------------------------*/
 
 // Liquid sensor ISR
 void lsensor_handler(void *arg){
     //Don't know what to put here hahahah
+    xQueueSendToBackFromISR(liquid_sensor_ISR_queue, true, NULL);
 }
 
 // Float Switch ISR
 void fswitch_handler(void *arg){
     //Don't know what to put here hahahah
+    xQueueSendToBackFromISR(float_switch_ISR_queue, true, NULL);
 }
 
 /*Hardware initialization----------------------------------------------------------------------------------------------------------*/
@@ -406,9 +408,10 @@ static void init_hw(void){
     gpio_isr_handler_add(GPIO_FLOAT_SWITCH, fswitch_handler, NULL);
 
     //Liquid sensor
-    // io_conf.pin_bit_mask = GPIO_LIQUID_SENSOR_SEL;
-    // gpio_config(&io_conf);
-    // gpio_isr_handler_add(GPIO_LIQUID_SENSOR, lsensor_handler, NULL);
+    io_conf.intr_type = GPIO_INTR_POSEDGE;
+    io_conf.pin_bit_mask = GPIO_LIQUID_SENSOR_SEL;
+    gpio_config(&io_conf);
+    gpio_isr_handler_add(GPIO_LIQUID_SENSOR, lsensor_handler, NULL);
 
     //LED strip
     led_strip_install();
@@ -697,14 +700,14 @@ void app_main()
 
     data_queue = xQueueCreate(queue_size, sizeof(device_telemetry_t)); 
     float_switch_ISR_queue = xQueueCreate(1, sizeof(bool));
-    water_level_ISR_queue = xQueueCreate(1, sizeof(bool));
+    liquid_sensor_ISR_queue = xQueueCreate(1, sizeof(bool));
 
     /*Start STA Wifi connection*/
     mqtt_callback_t mqtt_callback = 
     {
         .fetch_telemetry_event = dequeue_telemetry,
         .fetch_floatSW_event = dequeue_floatSW_notification_queue,
-        .fetch_waterlvl_event = dequeue_waterlvl_notification_queue,
+        .fetch_waterlvl_event = dequeue_lsensor_notification_queue,
         .update_config_event = update_device_config_callback,
         .feed_command_event = feed_command_event
     };
@@ -724,7 +727,7 @@ void app_main()
     /* Create a task to queue data every 10 seconds. */ 
     xTaskCreatePinnedToCore(&enqueue_telemetry, 
                             "Enqueue Telemetry.", 
-                            3*configMINIMAL_STACK_SIZE,
+                            6*configMINIMAL_STACK_SIZE,
                             NULL, 
                             5, 
                             NULL, 
