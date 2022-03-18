@@ -93,7 +93,7 @@ void publish_telemetry_event(iotc_context_handle_t context_handle,
     IOTC_UNUSED(user_data);
 
     if(m_mqtt_callback.fetch_telemetry_event) {
-        m_mqtt_callback.fetch_telemetry_event(telemtry_message.device_telemetry);
+        m_mqtt_callback.fetch_telemetry_event(&telemtry_message.device_telemetry);
     }
     else {
         ESP_LOGE(TAG, "fetch_telemetry_event is not set...");
@@ -213,7 +213,7 @@ void on_connection_state_changed(iotc_context_handle_t in_context_handle,
         /* Create a timed task to publish every 10 seconds. */
         delayed_publish_task = iotc_schedule_timed_task(in_context_handle,
                                publish_telemetry_event, 10,
-                               15, /*user_data=*/NULL);
+                               30, /*user_data=*/NULL);
         break;
 
     /* IOTC_CONNECTION_STATE_OPEN_FAILED is set when there was a problem

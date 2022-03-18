@@ -271,25 +271,28 @@ static void enqueue_telemetry(void* pvParameters)
     for(;;)
     {
         vTaskDelay(30000 / portTICK_PERIOD_MS);
-        ESP_LOGI(TAG, "Queueing the value : %f", currentTemp);
         xSemaphoreTake(device_config_mutex, portMAX_DELAY);
 
         device_telemetry.current_temp = currentTemp; 
         device_telemetry.food_count = foodCount;
-
-        xQueueSendToBack(data_queue, &device_telemetry, (TickType_t)0 );
         
         xSemaphoreGive(device_config_mutex);
+
+        ESP_LOGI(TAG, "Queuing Current Temp : %f", device_telemetry.current_temp);
+        ESP_LOGI(TAG, "Queuing food count Temp : %d", device_telemetry.food_count);
+
+        xQueueSendToBack(data_queue, &device_telemetry, (TickType_t)0 );
     }    
 }
 
-void dequeue_telemetry(device_telemetry_t device_telemetry)
+void dequeue_telemetry(struct device_telemetry_t* device_telemetry_wifi)
 {
+    float data = temp_threshold;
     if(data_queue != NULL)
     {
         if((int) uxQueueMessagesWaiting(data_queue) > 0)
         {
-            xQueueReceive(data_queue, &device_telemetry, (TickType_t)0);
+            xQueueReceive(data_queue, device_telemetry_wifi, (TickType_t)0);
         }
         else
         {
@@ -306,7 +309,7 @@ static bool dequeue_floatSW_notification_queue()
 {
 
     bool data = false;
-    if(data_queue != NULL)
+    if(float_switch_ISR_queue != NULL)
     {
         if((int) uxQueueMessagesWaiting(data_queue) > 0)
         {
@@ -328,7 +331,7 @@ static bool dequeue_lsensor_notification_queue()
 {
 
     bool data = false;
-    if(data_queue != NULL)
+    if(liquid_sensor_ISR_queue != NULL)
     {
         if((int) uxQueueMessagesWaiting(data_queue) > 0)
         {
@@ -702,7 +705,7 @@ void app_main()
 {
     device_config.desired_temp = 17.0;
 
-    data_queue = xQueueCreate(queue_size, sizeof(device_telemetry_t)); 
+    data_queue = xQueueCreate(queue_size, sizeof(struct device_telemetry_t)); 
     float_switch_ISR_queue = xQueueCreate(1, sizeof(bool));
     liquid_sensor_ISR_queue = xQueueCreate(1, sizeof(bool));
 
