@@ -29,7 +29,7 @@
 #define SUBSCRIBE_TOPIC_CONFIG "/devices/%s/config"
 #define PUBLISH_TOPIC_EVENT "/devices/%s/events"
 #define PUBLISH_TOPIC_STATE "/devices/%s/state"
-#define TEMPERATURE_DATA "{\"currentTemperature\" : %f}"
+#define TELEMETRY_DATA "{\"currentTemperature\" : %lf, \"foodLeft\" : %d, \"lowLevelSwitch\" : %d, \"waterLeak\", %d}"
 #define FEED_COMMAND "\"feed\""
 #define MIN_TEMP 20
 #define OUTPUT_GPIO 5
@@ -54,6 +54,13 @@ static iotc_timed_task_handle_t delayed_publish_task =
 iotc_context_handle_t iotc_context = IOTC_INVALID_CONTEXT_HANDLE;
 
 static mqtt_callback_t m_mqtt_callback;
+
+typedef struct {
+    device_telemetry_t device_telemetry;
+    bool low_level_switch;
+    bool water_leak;
+} telemtry_message_t;
+static telemtry_message_t telemtry_message = {0};
 
 
 static void initialize_sntp(void)
@@ -85,28 +92,42 @@ void publish_telemetry_event(iotc_context_handle_t context_handle,
     IOTC_UNUSED(timed_task);
     IOTC_UNUSED(user_data);
 
-    if(m_mqtt_callback.fetch_telemetry_event)
-    {
-        float data = m_mqtt_callback.fetch_telemetry_event();
-        if(data > temp_threshold)
-        {
-            char *publish_topic = NULL;
-            asprintf(&publish_topic, PUBLISH_TOPIC_EVENT, CONFIG_GIOT_DEVICE_ID);
-            char *publish_message = NULL;
-            asprintf(&publish_message, TEMPERATURE_DATA, data);
-            ESP_LOGI(TAG, "publishing msg \"%s\" to topic: \"%s\"", publish_message, publish_topic);
-
-            iotc_publish(context_handle, publish_topic, publish_message,
-                        iotc_example_qos,
-                        /*callback=*/NULL, /*user_data=*/NULL);
-            free(publish_topic);
-            free(publish_message);
-        } 
+    if(m_mqtt_callback.fetch_telemetry_event) {
+        m_mqtt_callback.fetch_telemetry_event(telemtry_message.device_telemetry);
     }
-    else
-    {
+    else {
         ESP_LOGE(TAG, "fetch_telemetry_event is not set...");
     }
+
+    if(m_mqtt_callback.fetch_floatSW_event) {
+        telemtry_message.low_level_switch = m_mqtt_callback.fetch_floatSW_event();
+    }
+    else {
+        ESP_LOGE(TAG, "fetch_floatSW_event is not set...");
+    }
+
+    if(m_mqtt_callback.fetch_waterlvl_event) {
+        telemtry_message.water_leak = m_mqtt_callback.fetch_waterlvl_event();
+    }
+    else {
+        ESP_LOGE(TAG, "fetch_waterlvl_event is not set...");
+    }
+
+    char *publish_topic = NULL;
+    asprintf(&publish_topic, PUBLISH_TOPIC_EVENT, CONFIG_GIOT_DEVICE_ID);
+    char *publish_message = NULL;
+    asprintf(&publish_message, TELEMETRY_DATA, 
+             &telemtry_message.device_telemetry.current_temp,
+             &telemtry_message.device_telemetry.food_count, 
+             &telemtry_message.low_level_switch, 
+             &telemtry_message.water_leak);
+    ESP_LOGI(TAG, "publishing msg \"%s\" to topic: \"%s\"", publish_message, publish_topic);
+
+    iotc_publish(context_handle, publish_topic, publish_message,
+                iotc_example_qos,
+                /*callback=*/NULL, /*user_data=*/NULL);
+    free(publish_topic);
+    free(publish_message);
 }
 
 void iotc_mqttlogic_subscribe_callback(
