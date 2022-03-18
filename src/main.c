@@ -35,6 +35,7 @@ static const char *TAGLIQUID = "CTRL_LIQUID";
 //Com btwn app-wifi cores
 static xQueueHandle data_queue;
 static int queue_size = 3;
+static struct device_telemetry_t device_telemetry = {0};
 
 //ISR Queues
 static xQueueHandle float_switch_ISR_queue;
@@ -273,11 +274,12 @@ static void enqueue_telemetry(void* pvParameters)
         ESP_LOGI(TAG, "Queueing the value : %f", currentTemp);
         xSemaphoreTake(device_config_mutex, portMAX_DELAY);
 
-        device_telemetry_t device_telemetry = {currentTemp, foodCount};
+        device_telemetry.current_temp = currentTemp; 
+        device_telemetry.food_count = foodCount;
 
         xQueueSendToBack(data_queue, &device_telemetry, (TickType_t)0 );
         
-        xSemaphoreGive(&device_config_mutex);
+        xSemaphoreGive(device_config_mutex);
     }    
 }
 
