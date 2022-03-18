@@ -2,6 +2,11 @@
 #define APP_WIFI_H_
 #include "freertos/queue.h"
 
+typedef struct device_telemetry_t {
+    float current_temp;
+    int food_count;
+} device_telemetry_t;
+
 typedef void (*fetch_telemetry_event_f)(device_telemetry_t);
 typedef bool (*fetch_switchSW_event_f)(void);
 typedef bool(*fetch_waterlvl_event_f)(void);
@@ -15,11 +20,6 @@ typedef struct {
     update_config_event_f update_config_event;
     execute_feed_command_event_f feed_command_event; 
 } mqtt_callback_t;
-
-typedef struct {
-    float current_temp;
-    int food_count;
-} device_telemetry_t;
 
 void esp_sta_init(mqtt_callback_t);
 

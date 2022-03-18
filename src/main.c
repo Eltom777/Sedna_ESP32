@@ -114,6 +114,8 @@ void fswitch_handler(void*);
 TaskHandle_t liquid_sensor_handle = NULL;
 void lsensor_handler(void*);
 
+static bool notification_flag = true;
+
 /*Controller Config----------------------------------------------------------------------------------------------------------*/
 //config & telemetry
 typedef struct device_config_t {
@@ -298,7 +300,7 @@ void dequeue_telemetry(device_telemetry_t device_telemetry)
     }
 }
 
-static bool dequeue_floatSW_notification_queue(void* pvParameters)
+static bool dequeue_floatSW_notification_queue()
 {
 
     bool data = false;
@@ -320,7 +322,7 @@ static bool dequeue_floatSW_notification_queue(void* pvParameters)
     return data;   
 }
 
-static bool dequeue_lsensor_notification_queue(void* pvParameters)
+static bool dequeue_lsensor_notification_queue()
 {
 
     bool data = false;
@@ -346,14 +348,14 @@ static bool dequeue_lsensor_notification_queue(void* pvParameters)
 
 // Liquid sensor ISR
 void lsensor_handler(void *arg){
-    //Don't know what to put here hahahah
-    xQueueSendToBackFromISR(liquid_sensor_ISR_queue, true, NULL);
+    ESP_LOGI(TAGLIQUID, "Water detected, sending a notification to the queue");
+    xQueueSendToBackFromISR(liquid_sensor_ISR_queue, &notification_flag, NULL);
 }
 
 // Float Switch ISR
 void fswitch_handler(void *arg){
-    //Don't know what to put here hahahah
-    xQueueSendToBackFromISR(float_switch_ISR_queue, true, NULL);
+    ESP_LOGI(TAGFLOAT, "Float switch dropped, sending a notification to the queue");
+    xQueueSendToBackFromISR(float_switch_ISR_queue, &notification_flag, NULL);
 }
 
 /*Hardware initialization----------------------------------------------------------------------------------------------------------*/
