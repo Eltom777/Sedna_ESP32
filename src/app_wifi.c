@@ -29,7 +29,7 @@
 #define SUBSCRIBE_TOPIC_CONFIG "/devices/%s/config"
 #define PUBLISH_TOPIC_EVENT "/devices/%s/events"
 #define PUBLISH_TOPIC_STATE "/devices/%s/state"
-#define TELEMETRY_DATA "{\"currentTemperature\" : %f, \"foodLeft\" : %d, \"lowLevelSwitch\" : %d, \"waterLeak\", %d}"
+#define TELEMETRY_DATA "{\"currentTemperature\" : %f, \"foodLeft\" : %d, \"lowLevelSwitch\" : %d, \"waterLeak\": %d}"
 #define FEED_COMMAND "\"feed\""
 #define MIN_TEMP 20
 #define OUTPUT_GPIO 5

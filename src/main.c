@@ -287,7 +287,6 @@ static void enqueue_telemetry(void* pvParameters)
 
 void dequeue_telemetry(struct device_telemetry_t* device_telemetry_wifi)
 {
-    float data = temp_threshold;
     if(data_queue != NULL)
     {
         if((int) uxQueueMessagesWaiting(data_queue) > 0)
@@ -311,7 +310,7 @@ static bool dequeue_floatSW_notification_queue()
     bool data = false;
     if(float_switch_ISR_queue != NULL)
     {
-        if((int) uxQueueMessagesWaiting(data_queue) > 0)
+        if((int) uxQueueMessagesWaiting(float_switch_ISR_queue) > 0)
         {
             xQueueReceiveFromISR(float_switch_ISR_queue, &data, (TickType_t)0);
         }
@@ -333,7 +332,7 @@ static bool dequeue_lsensor_notification_queue()
     bool data = false;
     if(liquid_sensor_ISR_queue != NULL)
     {
-        if((int) uxQueueMessagesWaiting(data_queue) > 0)
+        if((int) uxQueueMessagesWaiting(liquid_sensor_ISR_queue) > 0)
         {
             xQueueReceiveFromISR(liquid_sensor_ISR_queue, &data, (TickType_t)0);
         }
@@ -353,13 +352,11 @@ static bool dequeue_lsensor_notification_queue()
 
 // Liquid sensor ISR
 void lsensor_handler(void *arg){
-    ESP_LOGI(TAGLIQUID, "Water detected, sending a notification to the queue");
     xQueueSendToBackFromISR(liquid_sensor_ISR_queue, &notification_flag, NULL);
 }
 
 // Float Switch ISR
 void fswitch_handler(void *arg){
-    ESP_LOGI(TAGFLOAT, "Float switch dropped, sending a notification to the queue");
     xQueueSendToBackFromISR(float_switch_ISR_queue, &notification_flag, NULL);
 }
 
