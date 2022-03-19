@@ -33,8 +33,13 @@ static const char *TAGFLOAT = "CTRL_FLOAT";
 static const char *TAGLIQUID = "CTRL_LIQUID";
 
 //Com btwn app-wifi cores
-static QueueHandle_t data_queue;
-static int queue_size = 10;
+static xQueueHandle data_queue;
+static int queue_size = 3;
+static struct device_telemetry_t device_telemetry = {0};
+
+//ISR Queues
+static xQueueHandle float_switch_ISR_queue;
+static xQueueHandle liquid_sensor_ISR_queue;
 
 //Temp sub-system variables
 static DS18B20_Info * ds18b20_info;
@@ -110,6 +115,8 @@ void fswitch_handler(void*);
 TaskHandle_t liquid_sensor_handle = NULL;
 void lsensor_handler(void*);
 
+static bool notification_flag = true;
+
 /*Controller Config----------------------------------------------------------------------------------------------------------*/
 //config & telemetry
 typedef struct device_config_t {
@@ -134,17 +141,9 @@ typedef struct device_config_t {
     time_t feed_time;
 
 } device_config_t;
+static int foodCount = 12;
 static device_config_t device_config;
 static SemaphoreHandle_t device_config_mutex;
-
-typedef struct device_telemetry_t {
-    float current_temp;
-    int food_left;
-    bool low_level_switch;
-    bool water_leak;
-} device_telemetry_t;
-static device_telemetry_t device_telemetry;
-static SemaphoreHandle_t device_telemetry_mutex;
 
 //Print Variables
 /* device_config_mutex must be captured before calling*/
@@ -260,27 +259,6 @@ static void update_device_config_callback(char* new_device_config, size_t buffer
 }
 
 /*Ctrler-Wifi core communication----------------------------------------------------------------------------------------------------------*/
-float dequeue_telemetry()
-{
-    float data = temp_threshold;
-    if(data_queue != NULL)
-    {
-        if((int) uxQueueMessagesWaiting(data_queue) > 0)
-        {
-            xQueueReceive(data_queue, &data, (TickType_t)0);
-        }
-        else
-        {
-            ESP_LOGI(TAG, "Telemetry Queue is empty...");
-        }
-    }
-    else
-    {
-        ESP_LOGE(TAG, "Telemetry Queue is not set...");
-    }
-    return data;
-}
-
 static void enqueue_telemetry(void* pvParameters)
 {
 
@@ -292,11 +270,94 @@ static void enqueue_telemetry(void* pvParameters)
 
     for(;;)
     {
-        ESP_LOGI(TAG, "Queueing the value : %f", currentTemp);
-        xQueueSendToBack(data_queue, &currentTemp, (TickType_t)0);
+        vTaskDelay(30000 / portTICK_PERIOD_MS);
+        xSemaphoreTake(device_config_mutex, portMAX_DELAY);
 
-        vTaskDelay(10000 / portTICK_PERIOD_MS);
+        device_telemetry.current_temp = currentTemp; 
+        device_telemetry.food_count = foodCount;
+        
+        xSemaphoreGive(device_config_mutex);
+
+        ESP_LOGI(TAG, "Queuing Current Temp : %f", device_telemetry.current_temp);
+        ESP_LOGI(TAG, "Queuing food count Temp : %d", device_telemetry.food_count);
+
+        xQueueSendToBack(data_queue, &device_telemetry, (TickType_t)0 );
     }    
+}
+
+void dequeue_telemetry(struct device_telemetry_t* device_telemetry_wifi)
+{
+    if(data_queue != NULL)
+    {
+        if((int) uxQueueMessagesWaiting(data_queue) > 0)
+        {
+            xQueueReceive(data_queue, device_telemetry_wifi, (TickType_t)0);
+        }
+        else
+        {
+            ESP_LOGI(TAG, "Telemetry Queue is empty...");
+        }
+    }
+    else
+    {
+        ESP_LOGE(TAG, "Telemetry Queue is not set...");
+    }
+}
+
+static bool dequeue_floatSW_notification_queue()
+{
+
+    bool data = false;
+    if(float_switch_ISR_queue != NULL)
+    {
+        if((int) uxQueueMessagesWaiting(float_switch_ISR_queue) > 0)
+        {
+            xQueueReceiveFromISR(float_switch_ISR_queue, &data, (TickType_t)0);
+        }
+        else
+        {
+            ESP_LOGI(TAG, "Float switch ISR queue is empty...");
+        }
+    }
+    else
+    {
+        ESP_LOGE(TAG, "Float switch ISR queue is not set...");
+    }
+    return data;   
+}
+
+static bool dequeue_lsensor_notification_queue()
+{
+
+    bool data = false;
+    if(liquid_sensor_ISR_queue != NULL)
+    {
+        if((int) uxQueueMessagesWaiting(liquid_sensor_ISR_queue) > 0)
+        {
+            xQueueReceiveFromISR(liquid_sensor_ISR_queue, &data, (TickType_t)0);
+        }
+        else
+        {
+            ESP_LOGI(TAG, "Liquid sensor ISR queue is empty...");
+        }
+    }
+    else
+    {
+        ESP_LOGE(TAG, "Liquid sensor ISR queue is not set...");
+    }
+    return data;   
+}
+
+/*ISR Handler----------------------------------------------------------------------------------------------------------------------*/
+
+// Liquid sensor ISR
+void lsensor_handler(void *arg){
+    xQueueSendToBackFromISR(liquid_sensor_ISR_queue, &notification_flag, NULL);
+}
+
+// Float Switch ISR
+void fswitch_handler(void *arg){
+    xQueueSendToBackFromISR(float_switch_ISR_queue, &notification_flag, NULL);
 }
 
 /*Hardware initialization----------------------------------------------------------------------------------------------------------*/
@@ -351,9 +412,10 @@ static void init_hw(void){
     gpio_isr_handler_add(GPIO_FLOAT_SWITCH, fswitch_handler, NULL);
 
     //Liquid sensor
-    // io_conf.pin_bit_mask = GPIO_LIQUID_SENSOR_SEL;
-    // gpio_config(&io_conf);
-    // gpio_isr_handler_add(GPIO_LIQUID_SENSOR, lsensor_handler, NULL);
+    io_conf.intr_type = GPIO_INTR_POSEDGE;
+    io_conf.pin_bit_mask = GPIO_LIQUID_SENSOR_SEL;
+    gpio_config(&io_conf);
+    gpio_isr_handler_add(GPIO_LIQUID_SENSOR, lsensor_handler, NULL);
 
     //LED strip
     led_strip_install();
@@ -527,7 +589,6 @@ static float TempRead() {
         printf("%.1f\n", readTemp);
 
         vTaskDelayUntil(&last_wake_time, SAMPLE_PERIOD / portTICK_PERIOD_MS);
-        //ESP_LOGI(TAG,"Ram Left %d" ,xPortGetFreeHeapSize());
         return readTemp;
 }
 
@@ -610,53 +671,21 @@ void set_light(int brightness) {
     ESP_ERROR_CHECK(led_strip_flush(&strip));
 }
 
-/*Float switch sub-system----------------------------------------------------------------------------------------------------------*/
-void floatSwitchTask (void *p){
-    for(;;){
-        vTaskSuspend(NULL);
-        ESP_LOGI(TAGFLOAT, "Float Switch triggered!");
-        //TODO: create and call send data function to cloud more like setting variable
-        xSemaphoreTake(device_telemetry_mutex, portMAX_DELAY);
-        device_telemetry.low_level_switch = true;
-        xSemaphoreGive(device_telemetry_mutex);
-    }
-}
-
-void fswitch_handler(void *arg){
-    BaseType_t checkIfYieldRequired;
-    checkIfYieldRequired = xTaskResumeFromISR(float_switch_handle);
-    vPortEvaluateYieldFromISR(checkIfYieldRequired);
-}
-
-/*liquid sub-system----------------------------------------------------------------------------------------------------------*/
-// void liquidSensorTask (void *p){
-//     for(;;){
-//         vTaskSuspend(NULL);
-//         ESP_LOGI(TAGLIQUID, "Liquid Sensor triggered!");
-//         //TODO: create and call send data function to cloud more like setting variable
-//         xSemaphoreTake(device_telemetry_mutex, portMAX_DELAY);
-//         device_telemetry.water_leak = true;
-//         xSemaphoreGive(device_telemetry_mutex);
-//     }
-// }
-
-// void lsensor_handler(void *arg){
-//     BaseType_t checkIfYieldRequired;
-//     checkIfYieldRequired = xTaskResumeFromISR(liquid_sensor_handle);
-//     vPortEvaluateYieldFromISR(checkIfYieldRequired);
-// }
-
 /*main----------------------------------------------------------------------------------------------------------*/
 void app_main()
 {
     device_config.desired_temp = 17.0;
 
-    data_queue = xQueueCreate(queue_size, sizeof(float));  
+    data_queue = xQueueCreate(queue_size, sizeof(struct device_telemetry_t)); 
+    float_switch_ISR_queue = xQueueCreate(1, sizeof(bool));
+    liquid_sensor_ISR_queue = xQueueCreate(1, sizeof(bool));
 
     /*Start STA Wifi connection*/
     mqtt_callback_t mqtt_callback = 
     {
         .fetch_telemetry_event = dequeue_telemetry,
+        .fetch_floatSW_event = dequeue_floatSW_notification_queue,
+        .fetch_waterlvl_event = dequeue_lsensor_notification_queue,
         .update_config_event = update_device_config_callback,
         .feed_command_event = feed_command_event
     };
@@ -676,7 +705,7 @@ void app_main()
     /* Create a task to queue data every 10 seconds. */ 
     xTaskCreatePinnedToCore(&enqueue_telemetry, 
                             "Enqueue Telemetry.", 
-                            3*configMINIMAL_STACK_SIZE,
+                            6*configMINIMAL_STACK_SIZE,
                             NULL, 
                             5, 
                             NULL, 
@@ -690,24 +719,6 @@ void app_main()
                             6, 
                             &feeding_task_handler, 
                             ctrl_core);
-
-    /* Create a task to check float switch trigger.*/ 
-    xTaskCreatePinnedToCore(&floatSwitchTask, 
-                            "Float Switch Triggered.", 
-                            3*configMINIMAL_STACK_SIZE,
-                            NULL, 
-                            6, 
-                            &float_switch_handle, 
-                            ctrl_core);
-
-    // /* Create a task to check liquid trigger.*/ 
-    // xTaskCreatePinnedToCore(&liquidSensorTask, 
-    //                         "Liquid Sensor Triggered.", 
-    //                         configMINIMAL_STACK_SIZE,
-    //                         NULL, 
-    //                         6, 
-    //                         &liquid_sensor_handle, 
-    //                         ctrl_core);
     
     /* Create a task to check time and trigger control */ 
     xTaskCreatePinnedToCore(&planner_task,         
