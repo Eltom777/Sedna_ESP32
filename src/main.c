@@ -589,7 +589,6 @@ static float TempRead() {
         printf("%.1f\n", readTemp);
 
         vTaskDelayUntil(&last_wake_time, SAMPLE_PERIOD / portTICK_PERIOD_MS);
-        //ESP_LOGI(TAG,"Ram Left %d" ,xPortGetFreeHeapSize());
         return readTemp;
 }
 
@@ -672,31 +671,6 @@ void set_light(int brightness) {
     ESP_ERROR_CHECK(led_strip_flush(&strip));
 }
 
-/*Float switch sub-system----------------------------------------------------------------------------------------------------------*/
-// void floatSwitchTask (void *p){
-//     for(;;){
-//         vTaskSuspend(NULL);
-//         ESP_LOGI(TAGFLOAT, "Float Switch triggered!");
-//         //TODO: create and call send data function to cloud more like setting variable
-//         xSemaphoreTake(device_telemetry_mutex, portMAX_DELAY);
-//         device_telemetry.low_level_switch = true;
-//         xSemaphoreGive(device_telemetry_mutex);
-//     }
-// }
-
-/*liquid sub-system----------------------------------------------------------------------------------------------------------*/
-// void liquidSensorTask (void *p){
-//     for(;;){
-//         vTaskSuspend(NULL);
-//         ESP_LOGI(TAGLIQUID, "Liquid Sensor triggered!");
-//         //TODO: create and call send data function to cloud more like setting variable
-//         xSemaphoreTake(device_telemetry_mutex, portMAX_DELAY);
-//         device_telemetry.water_leak = true;
-//         xSemaphoreGive(device_telemetry_mutex);
-//     }
-// }
-
-
 /*main----------------------------------------------------------------------------------------------------------*/
 void app_main()
 {
@@ -745,24 +719,6 @@ void app_main()
                             6, 
                             &feeding_task_handler, 
                             ctrl_core);
-
-    // /* Create a task to check float switch trigger.*/ 
-    // xTaskCreatePinnedToCore(&floatSwitchTask, 
-    //                         "Float Switch Triggered.", 
-    //                         3*configMINIMAL_STACK_SIZE,
-    //                         NULL, 
-    //                         6, 
-    //                         &float_switch_handle, 
-    //                         ctrl_core);
-
-    // /* Create a task to check liquid trigger.*/ 
-    // xTaskCreatePinnedToCore(&liquidSensorTask, 
-    //                         "Liquid Sensor Triggered.", 
-    //                         configMINIMAL_STACK_SIZE,
-    //                         NULL, 
-    //                         6, 
-    //                         &liquid_sensor_handle, 
-    //                         ctrl_core);
     
     /* Create a task to check time and trigger control */ 
     xTaskCreatePinnedToCore(&planner_task,         
