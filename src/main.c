@@ -34,8 +34,7 @@ static const char *TAGWAVE = "CTRL_WAVE";
 
 //Com btwn app-wifi cores
 static xQueueHandle data_queue;
-static int queue_size = 3;
-static struct device_telemetry_t device_telemetry = {0};
+static int queue_size = 2;
 
 //ISR Queues
 static xQueueHandle float_switch_ISR_queue;
@@ -48,7 +47,6 @@ static OneWireBus * owb;
 static owb_rmt_driver_info rmt_driver_info;
 static OneWireBus_ROMCode rom_code;
 static owb_status status;
-static float currentTemp;
 static int relayPower;
 
 typedef enum FSMstates{
@@ -139,11 +137,13 @@ typedef struct device_config_t {
     //feed control
     bool feed_auto;
     time_t feed_time;
-
 } device_config_t;
-static int foodCount = 12;
 static device_config_t device_config;
 static SemaphoreHandle_t device_config_mutex;
+
+//Device status for temperature and food count of system
+static device_telemetry_t device_status ={0};
+static SemaphoreHandle_t device_status_mutex;
 
 //Print Variables
 /* device_config_mutex must be captured before calling*/
@@ -262,26 +262,22 @@ static void update_device_config_callback(char* new_device_config, size_t buffer
 static void enqueue_telemetry(void* pvParameters)
 {
 
-    if(data_queue == NULL)
-    {
+    if(data_queue == NULL) {
         ESP_LOGE(TAG, "Telemetry Queue is not set...");
         return;
     }
 
-    for(;;)
-    {
-        vTaskDelay(30000 / portTICK_PERIOD_MS);
-        xSemaphoreTake(device_config_mutex, portMAX_DELAY);
+    for(;;) {
+        xSemaphoreTake(device_status_mutex, portMAX_DELAY);
 
-        device_telemetry.current_temp = currentTemp; 
-        device_telemetry.food_count = foodCount;
+        ESP_LOGI(TAG, "Queuing Current Temp : %f", device_status.current_temp);
+        ESP_LOGI(TAG, "Queuing food count Temp : %d", device_status.food_count);
+
+        xQueueSendToBack(data_queue, &device_status, (TickType_t)0 );
         
-        xSemaphoreGive(device_config_mutex);
+        xSemaphoreGive(device_status_mutex);
 
-        ESP_LOGI(TAG, "Queuing Current Temp : %f", device_telemetry.current_temp);
-        ESP_LOGI(TAG, "Queuing food count Temp : %d", device_telemetry.food_count);
-
-        xQueueSendToBack(data_queue, &device_telemetry, (TickType_t)0 );
+        vTaskDelay(30000 / portTICK_PERIOD_MS);
     }    
 }
 
@@ -446,9 +442,14 @@ static void feed_fish(void* pvParameters) {
     for(;;) {
         vTaskSuspend(NULL);
         ESP_LOGI(TAGFEED, "Feeding fish...");
+        xSemaphoreTake(device_status_mutex, portMAX_DELAY);
+        device_status.food_count--;
+        xSemaphoreGive(device_status_mutex);
+
         ESP_ERROR_CHECK(mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, convert_servo_angle_to_duty_us(100)));
         vTaskDelay(63 / portTICK_RATE_MS);
         ESP_ERROR_CHECK(mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, 0));
+        
     }
 }
 
@@ -621,12 +622,12 @@ static void FSMTempCtrl(void* pvParameters)
             break;
             case Measure_State:
                 ESP_LOGI(TAGTEMP,"At Measure State");
-                currentTemp = TempRead();
-                if(currentTemp < device_config->desired_temp){
+                device_status.current_temp = TempRead();
+                if(device_status.current_temp < device_config->desired_temp){
                     ESP_LOGI(TAGTEMP,"Going to Low Temp State");
                     state = Temp_Low_State;
                 }
-                if(currentTemp >= device_config->desired_temp){
+                if(device_status.current_temp >= device_config->desired_temp){
                     ESP_LOGI(TAGTEMP,"Going to High Temp State");
                     state = Temp_High_State;
                 }
@@ -691,6 +692,7 @@ void set_light(int brightness) {
 void app_main()
 {
     device_config.desired_temp = 17.0;
+    device_status.food_count = 14;
 
     data_queue = xQueueCreate(queue_size, sizeof(struct device_telemetry_t)); 
     float_switch_ISR_queue = xQueueCreate(1, sizeof(bool));
@@ -708,6 +710,7 @@ void app_main()
     esp_sta_init(mqtt_callback);
 
     device_config_mutex = xSemaphoreCreateMutex();
+    device_status_mutex = xSemaphoreCreateMutex();
     
     init_hw();
     xTaskCreatePinnedToCore(&FSMTempCtrl, 
