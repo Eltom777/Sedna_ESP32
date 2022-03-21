@@ -31,6 +31,7 @@
 #define PUBLISH_TOPIC_STATE "/devices/%s/state"
 #define TELEMETRY_DATA "{\"currentTemperature\" : %f, \"foodLeft\" : %d, \"lowLevelSwitch\" : %d, \"waterLeak\": %d}"
 #define FEED_COMMAND "\"feed\""
+#define REFILL_COMMAND "\"refill\""
 #define MIN_TEMP 20
 #define OUTPUT_GPIO 5
 
@@ -165,11 +166,18 @@ void iotc_mqttlogic_subscribe_callback(
             }
         }
         else if(strcmp(subscribe_topic_command_without_wildcard, params->message.topic) == 0) {
-            ESP_LOGI(TAG, "Recieved cmd");
+            ESP_LOGI(TAG, "Recieved command %s", sub_message);
             if(strcmp(sub_message, FEED_COMMAND) == 0) {
-                ESP_LOGI(TAG, "The cmd is feed");
                 if(m_mqtt_callback.feed_command_event) {
                     m_mqtt_callback.feed_command_event(); 
+                }
+                else {
+                    ESP_LOGE(TAG, "fetch_telemetry_event is not set...");
+                }
+            }
+            else if(strcmp(sub_message, REFILL_COMMAND) == 0) {
+                if(m_mqtt_callback.refill_command_event) {
+                    m_mqtt_callback.refill_command_event(); 
                 }
                 else {
                     ESP_LOGE(TAG, "fetch_telemetry_event is not set...");
