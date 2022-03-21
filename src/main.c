@@ -458,6 +458,13 @@ void feed_command_event() {
     vTaskResume(feeding_task_handler);
 }
 
+void refill_command_event() {
+    ESP_LOGI(TAGFEED, "refilling");
+    xSemaphoreTake(device_status_mutex, portMAX_DELAY);
+    device_status.food_count = 14;
+    xSemaphoreGive(device_status_mutex);
+}
+
 /*Planner sub-system----------------------------------------------------------------------------------------------------------*/
 static long adjust_time(time_t* time_of_task)
 {
@@ -705,7 +712,8 @@ void app_main()
         .fetch_floatSW_event = dequeue_floatSW_notification_queue,
         .fetch_waterlvl_event = dequeue_lsensor_notification_queue,
         .update_config_event = update_device_config_callback,
-        .feed_command_event = feed_command_event
+        .feed_command_event = feed_command_event,
+        .refill_command_event = refill_command_event
     };
     esp_sta_init(mqtt_callback);
 
