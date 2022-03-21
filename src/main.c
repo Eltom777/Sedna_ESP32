@@ -22,6 +22,8 @@
 #include <sys/time.h>
 #include "led_strip.h"
 
+#include "driver/mcpwm.h"
+
 /* Global Variables----------------------------------------------------------------------------------------------------------*/
 //ESPI_LOG Tag
 static const char *TAG = "CTRL_APP";
@@ -29,13 +31,10 @@ static const char *TAGTEMP = "CTRL_TEMP";
 static const char *TAGFEED = "CTRL_FEED";
 static const char *TAGLED = "CTRL_LED";
 static const char *TAGWAVE = "CTRL_WAVE";
-static const char *TAGFLOAT = "CTRL_FLOAT";
-static const char *TAGLIQUID = "CTRL_LIQUID";
 
 //Com btwn app-wifi cores
 static xQueueHandle data_queue;
-static int queue_size = 3;
-static struct device_telemetry_t device_telemetry = {0};
+static int queue_size = 2;
 
 //ISR Queues
 static xQueueHandle float_switch_ISR_queue;
@@ -48,7 +47,6 @@ static OneWireBus * owb;
 static owb_rmt_driver_info rmt_driver_info;
 static OneWireBus_ROMCode rom_code;
 static owb_status status;
-static float currentTemp;
 static int relayPower;
 
 typedef enum FSMstates{
@@ -139,11 +137,13 @@ typedef struct device_config_t {
     //feed control
     bool feed_auto;
     time_t feed_time;
-
 } device_config_t;
-static int foodCount = 12;
 static device_config_t device_config;
 static SemaphoreHandle_t device_config_mutex;
+
+//Device status for temperature and food count of system
+static device_telemetry_t device_status ={0};
+static SemaphoreHandle_t device_status_mutex;
 
 //Print Variables
 /* device_config_mutex must be captured before calling*/
@@ -262,26 +262,22 @@ static void update_device_config_callback(char* new_device_config, size_t buffer
 static void enqueue_telemetry(void* pvParameters)
 {
 
-    if(data_queue == NULL)
-    {
+    if(data_queue == NULL) {
         ESP_LOGE(TAG, "Telemetry Queue is not set...");
         return;
     }
 
-    for(;;)
-    {
-        vTaskDelay(30000 / portTICK_PERIOD_MS);
-        xSemaphoreTake(device_config_mutex, portMAX_DELAY);
+    for(;;) {
+        xSemaphoreTake(device_status_mutex, portMAX_DELAY);
 
-        device_telemetry.current_temp = currentTemp; 
-        device_telemetry.food_count = foodCount;
+        ESP_LOGI(TAG, "Queuing Current Temp : %f", device_status.current_temp);
+        ESP_LOGI(TAG, "Queuing food count Temp : %d", device_status.food_count);
+
+        xQueueSendToBack(data_queue, &device_status, (TickType_t)0 );
         
-        xSemaphoreGive(device_config_mutex);
+        xSemaphoreGive(device_status_mutex);
 
-        ESP_LOGI(TAG, "Queuing Current Temp : %f", device_telemetry.current_temp);
-        ESP_LOGI(TAG, "Queuing food count Temp : %d", device_telemetry.food_count);
-
-        xQueueSendToBack(data_queue, &device_telemetry, (TickType_t)0 );
+        vTaskDelay(30000 / portTICK_PERIOD_MS);
     }    
 }
 
@@ -423,20 +419,50 @@ static void init_hw(void){
     ESP_ERROR_CHECK(led_strip_fill(&strip, 0, strip.length, led_brightness[1]));
     ESP_ERROR_CHECK(led_strip_flush(&strip));
     ESP_LOGI(TAG, "Exit HW INIT");
+
+    //Fish Feeder Servo
+    mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM0A, GPIO_FEEDER_SERVO);
+
+    mcpwm_config_t pwm_config = {
+        .frequency = 50, // frequency = 50Hz, i.e. for every servo motor time period should be 20ms
+        .cmpr_a = 0,     // duty cycle of PWMxA = 0
+        .counter_mode = MCPWM_UP_COUNTER,
+        .duty_mode = MCPWM_DUTY_MODE_0,
+    };
+    mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_0, &pwm_config);
 }
 
 /*Feeder sub-system----------------------------------------------------------------------------------------------------------*/
+static inline uint32_t convert_servo_angle_to_duty_us(int angle)
+{
+     return (angle + SERVO_MAX_DEGREE) * (SERVO_MAX_PULSEWIDTH_US - SERVO_MIN_PULSEWIDTH_US) / (2 * SERVO_MAX_DEGREE) + SERVO_MIN_PULSEWIDTH_US;
+}
+
 static void feed_fish(void* pvParameters) {
     for(;;) {
         vTaskSuspend(NULL);
         ESP_LOGI(TAGFEED, "Feeding fish...");
-        //TODO: create and call servo control function
+        xSemaphoreTake(device_status_mutex, portMAX_DELAY);
+        device_status.food_count--;
+        xSemaphoreGive(device_status_mutex);
+
+        ESP_ERROR_CHECK(mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, convert_servo_angle_to_duty_us(100)));
+        vTaskDelay(63 / portTICK_RATE_MS);
+        ESP_ERROR_CHECK(mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, 0));
+        
     }
 }
 
 void feed_command_event() {
     ESP_LOGI(TAGFEED, "Resuming feeding task...");
     vTaskResume(feeding_task_handler);
+}
+
+void refill_command_event() {
+    ESP_LOGI(TAGFEED, "refilling");
+    xSemaphoreTake(device_status_mutex, portMAX_DELAY);
+    device_status.food_count = 14;
+    xSemaphoreGive(device_status_mutex);
 }
 
 /*Planner sub-system----------------------------------------------------------------------------------------------------------*/
@@ -500,14 +526,13 @@ static void planner_task(void *pvParameters)
                     set_light(set_brightness);
                 }else{
                     ESP_LOGI(TAGLED, "Forcing light off");
-                    set_light(0); //0 intensity = off
+                    set_light(0);
                 }
                 
                 //set wavemaker state
                 if(device_config.wave_auto) {
                     milis_to_wait = adjust_time(&device_config.wave_on_time);
                     if(milis_to_wait < ONE_MINUTE) {
-                        //Turn wave on
                         ESP_LOGI(TAGWAVE, "Turning wave maker on");
                         gpio_set_level(GPIO_WAVE_RELAY, 0);
                         ESP_LOGI(TAGWAVE,"Wave Relay is On!");
@@ -520,7 +545,6 @@ static void planner_task(void *pvParameters)
 
                     milis_to_wait = adjust_time(&device_config.wave_off_time);
                     if(milis_to_wait < ONE_MINUTE) {
-                        //TODO: Turn wave off
                         ESP_LOGI(TAGWAVE, "Turning wave maker off");
                         gpio_set_level(GPIO_WAVE_RELAY, 1);
                         ESP_LOGI(TAGWAVE,"Wave Relay is Off!");
@@ -529,7 +553,7 @@ static void planner_task(void *pvParameters)
                     else {
                         ESP_LOGI(TAG, "Turning wave maker off in %ld milisec", milis_to_wait);
                     }
-                }else if(device_config.wave_force){
+                } else if(device_config.wave_force){
                     ESP_LOGI(TAGWAVE, "Forcing wave maker on");
                     if(gpio_get_level(GPIO_WAVE_RELAY) == 1){
                         gpio_set_level(GPIO_WAVE_RELAY, 0);
@@ -540,7 +564,7 @@ static void planner_task(void *pvParameters)
                         ESP_LOGI(TAGWAVE,"Wave Relay State %i" ,gpio_get_level(GPIO_WAVE_RELAY));
                     }
                 
-                }else{
+                } else{
                     ESP_LOGI(TAG, "Forcing wave maker off");
                     if(gpio_get_level(GPIO_WAVE_RELAY) == 0){
                         gpio_set_level(GPIO_WAVE_RELAY, 1);
@@ -556,8 +580,8 @@ static void planner_task(void *pvParameters)
                 if(device_config.feed_auto) {
                     milis_to_wait = adjust_time(&device_config.feed_time);
                     if(milis_to_wait < ONE_MINUTE) {
-                        //TODO: feed fish
-                        ESP_LOGI(TAGFEED, "Feeding fish");
+                        ESP_LOGI(TAGFEED, "Scheduled Feeding fish");
+                        feed_command_event();
                     }
                     else {
                         ESP_LOGI(TAGFEED, "feeding fish in %ld milisec", milis_to_wait);
@@ -605,12 +629,12 @@ static void FSMTempCtrl(void* pvParameters)
             break;
             case Measure_State:
                 ESP_LOGI(TAGTEMP,"At Measure State");
-                currentTemp = TempRead();
-                if(currentTemp < device_config->desired_temp){
+                device_status.current_temp = TempRead();
+                if(device_status.current_temp < device_config->desired_temp){
                     ESP_LOGI(TAGTEMP,"Going to Low Temp State");
                     state = Temp_Low_State;
                 }
-                if(currentTemp >= device_config->desired_temp){
+                if(device_status.current_temp >= device_config->desired_temp){
                     ESP_LOGI(TAGTEMP,"Going to High Temp State");
                     state = Temp_High_State;
                 }
@@ -675,6 +699,7 @@ void set_light(int brightness) {
 void app_main()
 {
     device_config.desired_temp = 17.0;
+    device_status.food_count = 14;
 
     data_queue = xQueueCreate(queue_size, sizeof(struct device_telemetry_t)); 
     float_switch_ISR_queue = xQueueCreate(1, sizeof(bool));
@@ -687,11 +712,13 @@ void app_main()
         .fetch_floatSW_event = dequeue_floatSW_notification_queue,
         .fetch_waterlvl_event = dequeue_lsensor_notification_queue,
         .update_config_event = update_device_config_callback,
-        .feed_command_event = feed_command_event
+        .feed_command_event = feed_command_event,
+        .refill_command_event = refill_command_event
     };
     esp_sta_init(mqtt_callback);
 
     device_config_mutex = xSemaphoreCreateMutex();
+    device_status_mutex = xSemaphoreCreateMutex();
     
     init_hw();
     xTaskCreatePinnedToCore(&FSMTempCtrl, 
@@ -714,7 +741,7 @@ void app_main()
     /* Create a task to control feeding servo. */
     xTaskCreatePinnedToCore(&feed_fish, 
                             "Feed Fish.", 
-                            configMINIMAL_STACK_SIZE,
+                            3*configMINIMAL_STACK_SIZE,
                             NULL, 
                             6, 
                             &feeding_task_handler, 
