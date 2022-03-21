@@ -22,7 +22,6 @@
 #include <sys/time.h>
 #include "led_strip.h"
 
-#include "iot_servo.h"
 #include "driver/mcpwm.h"
 
 /* Global Variables----------------------------------------------------------------------------------------------------------*/
