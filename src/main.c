@@ -518,14 +518,13 @@ static void planner_task(void *pvParameters)
                     set_light(set_brightness);
                 }else{
                     ESP_LOGI(TAGLED, "Forcing light off");
-                    set_light(0); //0 intensity = off
+                    set_light(0);
                 }
                 
                 //set wavemaker state
                 if(device_config.wave_auto) {
                     milis_to_wait = adjust_time(&device_config.wave_on_time);
                     if(milis_to_wait < ONE_MINUTE) {
-                        //Turn wave on
                         ESP_LOGI(TAGWAVE, "Turning wave maker on");
                         gpio_set_level(GPIO_WAVE_RELAY, 0);
                         ESP_LOGI(TAGWAVE,"Wave Relay is On!");
@@ -538,7 +537,6 @@ static void planner_task(void *pvParameters)
 
                     milis_to_wait = adjust_time(&device_config.wave_off_time);
                     if(milis_to_wait < ONE_MINUTE) {
-                        //TODO: Turn wave off
                         ESP_LOGI(TAGWAVE, "Turning wave maker off");
                         gpio_set_level(GPIO_WAVE_RELAY, 1);
                         ESP_LOGI(TAGWAVE,"Wave Relay is Off!");
@@ -547,7 +545,7 @@ static void planner_task(void *pvParameters)
                     else {
                         ESP_LOGI(TAG, "Turning wave maker off in %ld milisec", milis_to_wait);
                     }
-                }else if(device_config.wave_force){
+                } else if(device_config.wave_force){
                     ESP_LOGI(TAGWAVE, "Forcing wave maker on");
                     if(gpio_get_level(GPIO_WAVE_RELAY) == 1){
                         gpio_set_level(GPIO_WAVE_RELAY, 0);
@@ -558,7 +556,7 @@ static void planner_task(void *pvParameters)
                         ESP_LOGI(TAGWAVE,"Wave Relay State %i" ,gpio_get_level(GPIO_WAVE_RELAY));
                     }
                 
-                }else{
+                } else{
                     ESP_LOGI(TAG, "Forcing wave maker off");
                     if(gpio_get_level(GPIO_WAVE_RELAY) == 0){
                         gpio_set_level(GPIO_WAVE_RELAY, 1);
@@ -574,8 +572,8 @@ static void planner_task(void *pvParameters)
                 if(device_config.feed_auto) {
                     milis_to_wait = adjust_time(&device_config.feed_time);
                     if(milis_to_wait < ONE_MINUTE) {
-                        //TODO: feed fish
-                        ESP_LOGI(TAGFEED, "Feeding fish");
+                        ESP_LOGI(TAGFEED, "Scheduled Feeding fish");
+                        feed_command_event();
                     }
                     else {
                         ESP_LOGI(TAGFEED, "feeding fish in %ld milisec", milis_to_wait);
