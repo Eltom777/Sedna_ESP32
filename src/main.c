@@ -504,7 +504,6 @@ static void planner_task(void *pvParameters)
                 if(device_config.light_auto){
                     milis_to_wait = adjust_time(&device_config.light_on_time);
                     if(milis_to_wait < ONE_MINUTE) {
-                        //TODO: Turn lights on
                         ESP_LOGI(TAGLED, "Turning light on");
                         set_brightness = device_config.light_intensity;
                         set_light(set_brightness);
@@ -515,7 +514,6 @@ static void planner_task(void *pvParameters)
 
                     milis_to_wait = adjust_time(&device_config.light_off_time);
                     if(milis_to_wait < ONE_MINUTE) {
-                        //TODO: Turn lights off
                         ESP_LOGI(TAGLED, "Turning light off");
                         set_light(0); //0 intensity = off
                     }
