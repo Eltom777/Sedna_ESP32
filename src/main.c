@@ -69,7 +69,6 @@ enum planner_states_t
     CHECK_TIME,
     SLEEP
 };
-static TaskHandle_t planner_task_handler;
 static int ONE_MINUTE_SPEED_UP = 60 * ONE_SEC_SPEED_UP;
 
 static struct timeval time_now = {0};
@@ -144,6 +143,9 @@ static SemaphoreHandle_t device_config_mutex;
 //Device status for temperature and food count of system
 static device_telemetry_t device_status ={0};
 static SemaphoreHandle_t device_status_mutex;
+
+//Planner task synchronization
+static SemaphoreHandle_t planner_task_mutex;
 
 //Print Variables
 /* device_config_mutex must be captured before calling*/
@@ -251,7 +253,7 @@ static void update_device_config_callback(char* new_device_config, size_t buffer
 
     print_device_config();
 
-    vTaskResume(planner_task_handler);
+    xSemaphoreGive(planner_task_mutex);
 
     xSemaphoreGive(device_config_mutex);
     
@@ -492,7 +494,7 @@ static void planner_task(void *pvParameters)
         {
             case WAIT_FOR_SET_TIME:
                 ESP_LOGI(TAG, "Waiting for config to be set.");
-                vTaskSuspend(NULL);
+                xSemaphoreTake(planner_task_mutex, portMAX_DELAY);
                 planner_state = CHECK_TIME;
             break;
             case CHECK_TIME:
@@ -594,7 +596,7 @@ static void planner_task(void *pvParameters)
             case SLEEP:
                 planner_state = CHECK_TIME;
                 ESP_LOGI(TAG, "sleeping");
-                vTaskDelay(ONE_MINUTE_SPEED_UP / portTICK_RATE_MS);
+                xSemaphoreTake(planner_task_mutex, ONE_MINUTE_SPEED_UP / portTICK_RATE_MS);
             break;
         }  
     } 
@@ -719,6 +721,7 @@ void app_main()
 
     device_config_mutex = xSemaphoreCreateMutex();
     device_status_mutex = xSemaphoreCreateMutex();
+    planner_task_mutex = xSemaphoreCreateBinary();
     
     init_hw();
     xTaskCreatePinnedToCore(&FSMTempCtrl, 
@@ -753,7 +756,7 @@ void app_main()
                             3*configMINIMAL_STACK_SIZE,    
                             NULL,               
                             5,                  
-                            &planner_task_handler,               
+                            NULL,               
                             ctrl_core);
             
     ESP_LOGI(TAG, "Program quits");
