@@ -19,24 +19,34 @@
 #include "ds18b20.h"
 
 #include "cJSON.h"
+#include <sys/time.h>
 #include "led_strip.h"
+
+#include "driver/mcpwm.h"
 
 /* Global Variables----------------------------------------------------------------------------------------------------------*/
 //ESPI_LOG Tag
 static const char *TAG = "CTRL_APP";
+static const char *TAGTEMP = "CTRL_TEMP";
+static const char *TAGFEED = "CTRL_FEED";
+static const char *TAGLED = "CTRL_LED";
+static const char *TAGWAVE = "CTRL_WAVE";
 
 //Com btwn app-wifi cores
-static QueueHandle_t data_queue;
-static int queue_size = 10;
+static xQueueHandle data_queue;
+static int queue_size = 2;
 
-//Temp sub-system
+//ISR Queues
+static xQueueHandle float_switch_ISR_queue;
+static xQueueHandle liquid_sensor_ISR_queue;
+
+//Temp sub-system variables
 static DS18B20_Info * ds18b20_info;
 static TickType_t last_wake_time;
 static OneWireBus * owb;
 static owb_rmt_driver_info rmt_driver_info;
 static OneWireBus_ROMCode rom_code;
 static owb_status status;
-static float currentTemp;
 static int relayPower;
 
 typedef enum FSMstates{
@@ -48,20 +58,42 @@ typedef enum FSMstates{
         Turn_Off_Relay_State
 } FSMstates;
 
-//LED brightness settings
-static const rgb_t led_brightness[] = {
-    { .r = 0x00, .g = 0x00, .b = 0x00 },
-    { .r = 0x01, .g = 0x01, .b = 0x01 },
-    { .r = 0x03, .g = 0x03, .b = 0x03 },
-    { .r = 0x05, .g = 0x05, .b = 0x05 },
-    { .r = 0x06, .g = 0x06, .b = 0x06 },
-    { .r = 0x08, .g = 0x08, .b = 0x08 },
-    { .r = 0x0a, .g = 0x0a, .b = 0x0a },
-    { .r = 0x0c, .g = 0x0c, .b = 0x0c },
-    { .r = 0x0e, .g = 0x0e, .b = 0x0e },
-    { .r = 0x0f, .g = 0x0f, .b = 0x0f }
+//Planner sub-system variables
+#define LOCAL_TIME_ZONE "EST5EDT,M3.2.0/2,M11.1.0"
+#define ONE_SEC_SPEED_UP 700 // Speed up a sec by 300ms so deadline is not missed
+#define ONE_MINUTE 60000L
+
+enum planner_states_t
+{
+    WAIT_FOR_SET_TIME,
+    CHECK_TIME,
+    SLEEP
+};
+static int ONE_MINUTE_SPEED_UP = 60 * ONE_SEC_SPEED_UP;
+
+static struct timeval time_now = {0};
+static struct tm timeinfo_now = {0};
+
+static struct tm timeinfo_planner_task = {0};
+
+//LED brightness varibles
+void set_light(int);
+static const rgb_t led_brightness[] = { //0 - 10 values
+    { .r = 0x00, .g = 0x00, .b = 0x00 },//0
+    { .r = 0x01, .g = 0x01, .b = 0x01 },//1
+    { .r = 0x03, .g = 0x03, .b = 0x03 },//2
+    { .r = 0x05, .g = 0x05, .b = 0x05 },//3
+    { .r = 0x06, .g = 0x06, .b = 0x06 },//4
+    { .r = 0x07, .g = 0x07, .b = 0x07 },//5
+    { .r = 0x08, .g = 0x08, .b = 0x08 },//6
+    { .r = 0x0a, .g = 0x0a, .b = 0x0a },//7
+    { .r = 0x0c, .g = 0x0c, .b = 0x0c },//8
+    { .r = 0x0e, .g = 0x0e, .b = 0x0e },//9
+    { .r = 0x0f, .g = 0x0f, .b = 0x0f }//10
 };
 #define COLORS_TOTAL (sizeof(led_brightness) / sizeof(rgb_t))
+
+int set_brightness = 0;
 
 led_strip_t strip = {
         .type = LED_TYPE,
@@ -75,11 +107,15 @@ led_strip_t strip = {
 
 /*Interupt handlers----------------------------------------------------------------------------------------------------------*/
 static TaskHandle_t feeding_task_handler;
-TaskHandle_t float_switch_handler = NULL;
-void switch_handler(void*);
+TaskHandle_t float_switch_handle = NULL;
+void fswitch_handler(void*);
+TaskHandle_t liquid_sensor_handle = NULL;
+void lsensor_handler(void*);
+
+static bool notification_flag = true;
 
 /*Controller Config----------------------------------------------------------------------------------------------------------*/
-//Variables
+//config & telemetry
 typedef struct device_config_t {
     //temperature system
     float desired_temp;
@@ -98,11 +134,18 @@ typedef struct device_config_t {
     time_t wave_off_time;
 
     //feed control
+    bool feed_auto;
     time_t feed_time;
-
 } device_config_t;
 static device_config_t device_config;
 static SemaphoreHandle_t device_config_mutex;
+
+//Device status for temperature and food count of system
+static device_telemetry_t device_status ={0};
+static SemaphoreHandle_t device_status_mutex;
+
+//Planner task synchronization
+static SemaphoreHandle_t planner_task_mutex;
 
 //Print Variables
 /* device_config_mutex must be captured before calling*/
@@ -117,6 +160,7 @@ static void print_device_config() {
     ESP_LOGI(TAG, "wave_auto: %d", device_config.wave_auto);
     ESP_LOGI(TAG, "wave_on_time: %ld", device_config.wave_on_time);
     ESP_LOGI(TAG, "wave_off_time: %ld", device_config.wave_off_time);
+    ESP_LOGI(TAG, "feed_auto: %d", device_config.feed_auto);
     ESP_LOGI(TAG, "feed_time: %ld", device_config.feed_time);
 }
 
@@ -195,7 +239,12 @@ static void update_device_config_callback(char* new_device_config, size_t buffer
         device_config.wave_off_time = (time_t) attribute->valueint;
     else
         ESP_LOGI(TAG, "waveOffTime not set in new config");
-    
+
+    attribute = cJSON_GetObjectItem(root, "feedAuto");
+    if(attribute != NULL)
+        device_config.feed_auto = cJSON_IsTrue(attribute);
+    else
+        ESP_LOGI(TAG, "feedTime not set in new config");
     attribute = cJSON_GetObjectItem(root, "feedTime");
     if(attribute != NULL)
         device_config.feed_time = (time_t) attribute->valueint;
@@ -204,20 +253,43 @@ static void update_device_config_callback(char* new_device_config, size_t buffer
 
     print_device_config();
 
+    xSemaphoreGive(planner_task_mutex);
+
     xSemaphoreGive(device_config_mutex);
     
     cJSON_Delete(root);
 }
 
 /*Ctrler-Wifi core communication----------------------------------------------------------------------------------------------------------*/
-float dequeue_telemetry()
+static void enqueue_telemetry(void* pvParameters)
 {
-    float data = temp_threshold;
+
+    if(data_queue == NULL) {
+        ESP_LOGE(TAG, "Telemetry Queue is not set...");
+        return;
+    }
+
+    for(;;) {
+        xSemaphoreTake(device_status_mutex, portMAX_DELAY);
+
+        ESP_LOGI(TAG, "Queuing Current Temp : %f", device_status.current_temp);
+        ESP_LOGI(TAG, "Queuing food count Temp : %d", device_status.food_count);
+
+        xQueueSendToBack(data_queue, &device_status, (TickType_t)0 );
+        
+        xSemaphoreGive(device_status_mutex);
+
+        vTaskDelay(30000 / portTICK_PERIOD_MS);
+    }    
+}
+
+void dequeue_telemetry(struct device_telemetry_t* device_telemetry_wifi)
+{
     if(data_queue != NULL)
     {
         if((int) uxQueueMessagesWaiting(data_queue) > 0)
         {
-            xQueueReceive(data_queue, &data, (TickType_t)0);
+            xQueueReceive(data_queue, device_telemetry_wifi, (TickType_t)0);
         }
         else
         {
@@ -228,42 +300,85 @@ float dequeue_telemetry()
     {
         ESP_LOGE(TAG, "Telemetry Queue is not set...");
     }
-    return data;
 }
 
-static void enqueue_telemetry(void* pvParameters)
+static bool dequeue_floatSW_notification_queue()
 {
 
-    if(data_queue == NULL)
+    bool data = false;
+    if(float_switch_ISR_queue != NULL)
     {
-        ESP_LOGE(TAG, "Telemetry Queue is not set...");
-        return;
+        if((int) uxQueueMessagesWaiting(float_switch_ISR_queue) > 0)
+        {
+            xQueueReceiveFromISR(float_switch_ISR_queue, &data, (TickType_t)0);
+        }
+        else
+        {
+            ESP_LOGI(TAG, "Float switch ISR queue is empty...");
+        }
     }
-
-    for(;;)
+    else
     {
-        ESP_LOGI(TAG, "Queueing the value : %f", currentTemp);
-        xQueueSendToBack(data_queue, &currentTemp, (TickType_t)0);
+        ESP_LOGE(TAG, "Float switch ISR queue is not set...");
+    }
+    return data;   
+}
 
-        vTaskDelay(10000 / portTICK_PERIOD_MS);
-    }    
+static bool dequeue_lsensor_notification_queue()
+{
+
+    bool data = false;
+    if(liquid_sensor_ISR_queue != NULL)
+    {
+        if((int) uxQueueMessagesWaiting(liquid_sensor_ISR_queue) > 0)
+        {
+            xQueueReceiveFromISR(liquid_sensor_ISR_queue, &data, (TickType_t)0);
+        }
+        else
+        {
+            ESP_LOGI(TAG, "Liquid sensor ISR queue is empty...");
+        }
+    }
+    else
+    {
+        ESP_LOGE(TAG, "Liquid sensor ISR queue is not set...");
+    }
+    return data;   
+}
+
+/*ISR Handler----------------------------------------------------------------------------------------------------------------------*/
+
+// Liquid sensor ISR
+void lsensor_handler(void *arg){
+    xQueueSendToBackFromISR(liquid_sensor_ISR_queue, &notification_flag, NULL);
+}
+
+// Float Switch ISR
+void fswitch_handler(void *arg){
+    xQueueSendToBackFromISR(float_switch_ISR_queue, &notification_flag, NULL);
 }
 
 /*Hardware initialization----------------------------------------------------------------------------------------------------------*/
 static void init_hw(void){
 
-    //Temp probe
+    //Temp relay
     gpio_config_t io_conf;
     io_conf.mode = GPIO_MODE_INPUT_OUTPUT;
-    io_conf.pin_bit_mask = GPIO_HEATER_RELAY_PIN_SEL;
     io_conf.intr_type = GPIO_INTR_DISABLE;
     io_conf.pull_down_en = 0;
     io_conf.pull_up_en = 0;
+    io_conf.pin_bit_mask = GPIO_HEATER_RELAY_PIN_SEL;
     gpio_config(&io_conf);
     gpio_set_level(GPIO_HEATER_RELAY, 0);
 
+    //Wave relay
+    io_conf.pin_bit_mask = GPIO_WAVE_RELAY_PIN_SEL;
+    gpio_config(&io_conf);
+    gpio_set_level(GPIO_WAVE_RELAY, 0);
+
+    //Temp probe
     // Create a 1-Wire bus, using the RMT timeslot driver
-    owb = owb_rmt_initialize(&rmt_driver_info, GPIO_DS18B20_0, RMT_CHANNEL_1, RMT_CHANNEL_0);
+    owb = owb_rmt_initialize(&rmt_driver_info, GPIO_DS18B20_0, RMT_CHANNEL_1, RMT_CHANNEL_2);
     owb_use_crc(owb, true); // enable CRC check for ROM code
     // For a single device only:
     status = owb_read_rom(owb, &rom_code);
@@ -286,30 +401,203 @@ static void init_hw(void){
 
     //Float switch
     io_conf.mode = GPIO_MODE_INPUT;
-    io_conf.pin_bit_mask = GPIO_FLOAT_SWITCH;
     io_conf.intr_type = GPIO_INTR_NEGEDGE;
     io_conf.pull_up_en = 1;
+    io_conf.pin_bit_mask = GPIO_FLOAT_SWITCH_SEL;
     gpio_config(&io_conf);
 
     gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
-    gpio_isr_handler_add(GPIO_FLOAT_SWITCH, switch_handler, NULL);
+    gpio_isr_handler_add(GPIO_FLOAT_SWITCH, fswitch_handler, NULL);
+
+    //Liquid sensor
+    io_conf.intr_type = GPIO_INTR_POSEDGE;
+    io_conf.pin_bit_mask = GPIO_LIQUID_SENSOR_SEL;
+    gpio_config(&io_conf);
+    gpio_isr_handler_add(GPIO_LIQUID_SENSOR, lsensor_handler, NULL);
 
     //LED strip
+    led_strip_install();
     ESP_ERROR_CHECK(led_strip_init(&strip));
+    ESP_ERROR_CHECK(led_strip_fill(&strip, 0, strip.length, led_brightness[1]));
+    ESP_ERROR_CHECK(led_strip_flush(&strip));
+    ESP_LOGI(TAG, "Exit HW INIT");
+
+    //Fish Feeder Servo
+    mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM0A, GPIO_FEEDER_SERVO);
+
+    mcpwm_config_t pwm_config = {
+        .frequency = 50, // frequency = 50Hz, i.e. for every servo motor time period should be 20ms
+        .cmpr_a = 0,     // duty cycle of PWMxA = 0
+        .counter_mode = MCPWM_UP_COUNTER,
+        .duty_mode = MCPWM_DUTY_MODE_0,
+    };
+    mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_0, &pwm_config);
 }
 
 /*Feeder sub-system----------------------------------------------------------------------------------------------------------*/
+static inline uint32_t convert_servo_angle_to_duty_us(int angle)
+{
+     return (angle + SERVO_MAX_DEGREE) * (SERVO_MAX_PULSEWIDTH_US - SERVO_MIN_PULSEWIDTH_US) / (2 * SERVO_MAX_DEGREE) + SERVO_MIN_PULSEWIDTH_US;
+}
+
 static void feed_fish(void* pvParameters) {
     for(;;) {
         vTaskSuspend(NULL);
-        ESP_LOGI(TAG, "Feeding fish...");
-        //TODO: create and call servo control function
+        ESP_LOGI(TAGFEED, "Feeding fish...");
+        xSemaphoreTake(device_status_mutex, portMAX_DELAY);
+        device_status.food_count--;
+        xSemaphoreGive(device_status_mutex);
+
+        ESP_ERROR_CHECK(mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, convert_servo_angle_to_duty_us(100)));
+        vTaskDelay(63 / portTICK_RATE_MS);
+        ESP_ERROR_CHECK(mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, 0));
+        
     }
 }
 
 void feed_command_event() {
-    ESP_LOGI(TAG, "Resuming feeding task...");
+    ESP_LOGI(TAGFEED, "Resuming feeding task...");
     vTaskResume(feeding_task_handler);
+}
+
+void refill_command_event() {
+    ESP_LOGI(TAGFEED, "refilling");
+    xSemaphoreTake(device_status_mutex, portMAX_DELAY);
+    device_status.food_count = 14;
+    xSemaphoreGive(device_status_mutex);
+}
+
+/*Planner sub-system----------------------------------------------------------------------------------------------------------*/
+static long adjust_time(time_t* time_of_task)
+{
+    long milis_of_exec_time, milis_of_current_time;
+    long milis_to_wait;
+
+    gettimeofday(&time_now, LOCAL_TIME_ZONE);
+    localtime_r(&time_now.tv_sec, &timeinfo_now);
+    localtime_r(time_of_task, &timeinfo_planner_task);
+
+    milis_of_current_time = (((timeinfo_now.tm_hour * 60) + timeinfo_now.tm_min) * 60 + timeinfo_now.tm_sec) * 1000;
+    milis_of_exec_time = (((timeinfo_planner_task.tm_hour * 60) + timeinfo_planner_task.tm_min) * 60 + timeinfo_planner_task.tm_sec) * 1000;
+    milis_to_wait=(milis_of_exec_time-milis_of_current_time>0) ? (milis_of_exec_time-milis_of_current_time) : (milis_of_exec_time-milis_of_current_time+(24*3600*1000));
+
+    return milis_to_wait;
+}
+
+static void planner_task(void *pvParameters)
+{
+    long milis_to_wait;
+    enum planner_states_t planner_state = WAIT_FOR_SET_TIME;
+    for(;;)
+    {
+        switch (planner_state) 
+        {
+            case WAIT_FOR_SET_TIME:
+                ESP_LOGI(TAG, "Waiting for config to be set.");
+                xSemaphoreTake(planner_task_mutex, portMAX_DELAY);
+                planner_state = CHECK_TIME;
+            break;
+            case CHECK_TIME:
+                xSemaphoreTake(device_config_mutex, portMAX_DELAY);
+
+                //set light state
+                if(device_config.light_auto){
+                    milis_to_wait = adjust_time(&device_config.light_on_time);
+                    if(milis_to_wait < ONE_MINUTE) {
+                        ESP_LOGI(TAGLED, "Turning light on");
+                        set_brightness = device_config.light_intensity;
+                        set_light(set_brightness);
+                    }
+                    else {
+                        ESP_LOGI(TAGLED, "Turning light on in %ld milisec", milis_to_wait);
+                    }
+
+                    milis_to_wait = adjust_time(&device_config.light_off_time);
+                    if(milis_to_wait < ONE_MINUTE) {
+                        ESP_LOGI(TAGLED, "Turning light off");
+                        set_light(0); //0 intensity = off
+                    }
+                    else {
+                        ESP_LOGI(TAGLED, "Turning light off in %ld milisec", milis_to_wait);
+                    }
+                }else if(device_config.light_force){
+                    ESP_LOGI(TAGLED, "Forcing light on");
+                    set_brightness = device_config.light_intensity;
+                    set_light(set_brightness);
+                }else{
+                    ESP_LOGI(TAGLED, "Forcing light off");
+                    set_light(0);
+                }
+                
+                //set wavemaker state
+                if(device_config.wave_auto) {
+                    milis_to_wait = adjust_time(&device_config.wave_on_time);
+                    if(milis_to_wait < ONE_MINUTE) {
+                        ESP_LOGI(TAGWAVE, "Turning wave maker on");
+                        gpio_set_level(GPIO_WAVE_RELAY, 0);
+                        ESP_LOGI(TAGWAVE,"Wave Relay is On!");
+                        ESP_LOGI(TAGWAVE,"Wave Relay State %i" ,gpio_get_level(GPIO_WAVE_RELAY));
+
+                    }
+                    else {
+                        ESP_LOGI(TAGWAVE, "Turning wave maker on in %ld milisec", milis_to_wait);
+                    }
+
+                    milis_to_wait = adjust_time(&device_config.wave_off_time);
+                    if(milis_to_wait < ONE_MINUTE) {
+                        ESP_LOGI(TAGWAVE, "Turning wave maker off");
+                        gpio_set_level(GPIO_WAVE_RELAY, 1);
+                        ESP_LOGI(TAGWAVE,"Wave Relay is Off!");
+                        ESP_LOGI(TAGWAVE,"Wave Relay State %i" ,gpio_get_level(GPIO_WAVE_RELAY));
+                    }
+                    else {
+                        ESP_LOGI(TAG, "Turning wave maker off in %ld milisec", milis_to_wait);
+                    }
+                } else if(device_config.wave_force){
+                    ESP_LOGI(TAGWAVE, "Forcing wave maker on");
+                    if(gpio_get_level(GPIO_WAVE_RELAY) == 1){
+                        gpio_set_level(GPIO_WAVE_RELAY, 0);
+                        ESP_LOGI(TAGWAVE,"Wave Relay is On!");
+                        ESP_LOGI(TAGWAVE,"Wave Relay State %i" ,gpio_get_level(GPIO_WAVE_RELAY));
+                    }else{
+                        ESP_LOGI(TAGWAVE,"Wave Relay already On!");
+                        ESP_LOGI(TAGWAVE,"Wave Relay State %i" ,gpio_get_level(GPIO_WAVE_RELAY));
+                    }
+                
+                } else{
+                    ESP_LOGI(TAG, "Forcing wave maker off");
+                    if(gpio_get_level(GPIO_WAVE_RELAY) == 0){
+                        gpio_set_level(GPIO_WAVE_RELAY, 1);
+                        ESP_LOGI(TAGWAVE,"Wave Relay is Off!");
+                        ESP_LOGI(TAGWAVE,"Wave Relay State %i" ,gpio_get_level(GPIO_WAVE_RELAY));
+                    }else{
+                        ESP_LOGI(TAGWAVE,"Wave Relay already Off!");
+                        ESP_LOGI(TAGWAVE,"Wave Relay State %i" ,gpio_get_level(GPIO_WAVE_RELAY));
+                    }
+                }
+
+                //set feeder state
+                if(device_config.feed_auto) {
+                    milis_to_wait = adjust_time(&device_config.feed_time);
+                    if(milis_to_wait < ONE_MINUTE) {
+                        ESP_LOGI(TAGFEED, "Scheduled Feeding fish");
+                        feed_command_event();
+                    }
+                    else {
+                        ESP_LOGI(TAGFEED, "feeding fish in %ld milisec", milis_to_wait);
+                    }
+                }
+
+                planner_state = SLEEP;
+                xSemaphoreGive(device_config_mutex);
+            break;
+            case SLEEP:
+                planner_state = CHECK_TIME;
+                ESP_LOGI(TAG, "sleeping");
+                xSemaphoreTake(planner_task_mutex, ONE_MINUTE_SPEED_UP / portTICK_RATE_MS);
+            break;
+        }  
+    } 
 }
 
 /*Temperature sub-system----------------------------------------------------------------------------------------------------------*/
@@ -325,7 +613,6 @@ static float TempRead() {
         printf("%.1f\n", readTemp);
 
         vTaskDelayUntil(&last_wake_time, SAMPLE_PERIOD / portTICK_PERIOD_MS);
-        ESP_LOGI(TAG,"Ram Left %d" ,xPortGetFreeHeapSize());
         return readTemp;
 }
 
@@ -335,65 +622,65 @@ static void FSMTempCtrl(void* pvParameters)
     enum FSMstates state = Idle_State;
     for(;;)
     {
-        ESP_LOGI(TAG,"Device Desired Temp: %f" ,device_config->desired_temp);
+        ESP_LOGI(TAGTEMP,"Device Desired Temp: %f" ,device_config->desired_temp);
         switch(state){
             case Idle_State:
                 state = Measure_State;
             break;
             case Measure_State:
-                ESP_LOGI(TAG,"At Measure State");
-                currentTemp = TempRead();
-                if(currentTemp < device_config->desired_temp){
-                    ESP_LOGI(TAG,"Going to Low Temp State");
+                ESP_LOGI(TAGTEMP,"At Measure State");
+                device_status.current_temp = TempRead();
+                if(device_status.current_temp < device_config->desired_temp){
+                    ESP_LOGI(TAGTEMP,"Going to Low Temp State");
                     state = Temp_Low_State;
                 }
-                if(currentTemp >= device_config->desired_temp){
-                    ESP_LOGI(TAG,"Going to High Temp State");
+                if(device_status.current_temp >= device_config->desired_temp){
+                    ESP_LOGI(TAGTEMP,"Going to High Temp State");
                     state = Temp_High_State;
                 }
             break;
             case Temp_Low_State:
-                ESP_LOGI(TAG,"At Low Temp State");
+                ESP_LOGI(TAGTEMP,"At Low Temp State");
                 relayPower = gpio_get_level(GPIO_HEATER_RELAY);
                 if(relayPower == 1)
                 {
-                    ESP_LOGI(TAG,"Going to Turn Relay On State");
+                    ESP_LOGI(TAGTEMP,"Going to Turn Relay On State");
                     state = Turn_On_Relay_State;
                 }
                 else 
                 {
-                    ESP_LOGI(TAG,"Going to Measure State.");
+                    ESP_LOGI(TAGTEMP,"Going to Measure State.");
                     state = Measure_State;
                 }
             break;
             case Temp_High_State:
-                ESP_LOGI(TAG,"At High Temp State");
+                ESP_LOGI(TAGTEMP,"At High Temp State");
                 relayPower = gpio_get_level(GPIO_HEATER_RELAY);
                 if(relayPower ==  0)
                 {
-                    ESP_LOGI(TAG,"Going to Turn Relay Off State");
+                    ESP_LOGI(TAGTEMP,"Going to Turn Relay Off State");
                     state = Turn_Off_Relay_State;
                 }
                 else 
                 {
-                    ESP_LOGI(TAG,"Going to Measure State.");
+                    ESP_LOGI(TAGTEMP,"Going to Measure State.");
                     state = Measure_State;
                 }
             break;
             case Turn_On_Relay_State:
-                ESP_LOGI(TAG,"At Turn Relay On State");
+                ESP_LOGI(TAGTEMP,"At Turn Relay On State");
                 gpio_set_level(GPIO_HEATER_RELAY, 0);
-                ESP_LOGI(TAG,"Relay is On!");
-                ESP_LOGI(TAG,"Relay State %i" ,gpio_get_level(GPIO_HEATER_RELAY));
-                ESP_LOGI(TAG,"Going to Measure State.");
+                ESP_LOGI(TAGTEMP,"Relay is On!");
+                ESP_LOGI(TAGTEMP,"Relay State %i" ,gpio_get_level(GPIO_HEATER_RELAY));
+                ESP_LOGI(TAGTEMP,"Going to Measure State.");
                 state = Measure_State;
             break;
             case Turn_Off_Relay_State:
-                ESP_LOGI(TAG,"At Turn Relay Off State");
+                ESP_LOGI(TAGTEMP,"At Turn Relay Off State");
                 gpio_set_level(GPIO_HEATER_RELAY, 1);
-                ESP_LOGI(TAG,"Relay is Off!");
-                ESP_LOGI(TAG,"Relay State %i" ,gpio_get_level(GPIO_HEATER_RELAY));
-                ESP_LOGI(TAG,"Going to Measure State.");
+                ESP_LOGI(TAGTEMP,"Relay is Off!");
+                ESP_LOGI(TAGTEMP,"Relay State %i" ,gpio_get_level(GPIO_HEATER_RELAY));
+                ESP_LOGI(TAGTEMP,"Going to Measure State.");
                 state = Measure_State;
             break;
         }
@@ -402,45 +689,37 @@ static void FSMTempCtrl(void* pvParameters)
 }
 
 /*Lighting sub-system----------------------------------------------------------------------------------------------------------*/
-static void set_light(int brightness) {
-    //birghtness is from 0-10 increments of 0.5
+void set_light(int brightness) {
+    //brightness is from 0-10 increments of 1
     ESP_ERROR_CHECK(led_strip_fill(&strip, 0, strip.length, led_brightness[brightness]));
     ESP_ERROR_CHECK(led_strip_flush(&strip));
-}
-
-/*Float switch sub-system----------------------------------------------------------------------------------------------------------*/
-void floatSwitchTask (void *p){
-    for(;;){
-        vTaskSuspend(NULL);
-        ESP_LOGI(TAG, "Float Switch triggered!");
-        //TODO: create and call send data function to cloud more like setting variable
-    }
-}
-
-void switch_handler(void *arg){
-    BaseType_t checkIfYieldRequired;
-    checkIfYieldRequired = xTaskResumeFromISR(float_switch_handler);
-    vPortEvaluateYieldFromISR(checkIfYieldRequired);
-    //Send data to cloud
 }
 
 /*main----------------------------------------------------------------------------------------------------------*/
 void app_main()
 {
     device_config.desired_temp = 17.0;
+    device_status.food_count = 14;
 
-    data_queue = xQueueCreate(queue_size, sizeof(float));  
+    data_queue = xQueueCreate(queue_size, sizeof(struct device_telemetry_t)); 
+    float_switch_ISR_queue = xQueueCreate(1, sizeof(bool));
+    liquid_sensor_ISR_queue = xQueueCreate(1, sizeof(bool));
 
     /*Start STA Wifi connection*/
     mqtt_callback_t mqtt_callback = 
     {
         .fetch_telemetry_event = dequeue_telemetry,
+        .fetch_floatSW_event = dequeue_floatSW_notification_queue,
+        .fetch_waterlvl_event = dequeue_lsensor_notification_queue,
         .update_config_event = update_device_config_callback,
-        .feed_command_event = feed_command_event
+        .feed_command_event = feed_command_event,
+        .refill_command_event = refill_command_event
     };
     esp_sta_init(mqtt_callback);
 
     device_config_mutex = xSemaphoreCreateMutex();
+    device_status_mutex = xSemaphoreCreateMutex();
+    planner_task_mutex = xSemaphoreCreateBinary();
     
     init_hw();
     xTaskCreatePinnedToCore(&FSMTempCtrl, 
@@ -454,7 +733,7 @@ void app_main()
     /* Create a task to queue data every 10 seconds. */ 
     xTaskCreatePinnedToCore(&enqueue_telemetry, 
                             "Enqueue Telemetry.", 
-                            3*configMINIMAL_STACK_SIZE,
+                            6*configMINIMAL_STACK_SIZE,
                             NULL, 
                             5, 
                             NULL, 
@@ -463,20 +742,20 @@ void app_main()
     /* Create a task to control feeding servo. */
     xTaskCreatePinnedToCore(&feed_fish, 
                             "Feed Fish.", 
-                            configMINIMAL_STACK_SIZE,
+                            3*configMINIMAL_STACK_SIZE,
                             NULL, 
                             6, 
                             &feeding_task_handler, 
                             ctrl_core);
-
-    /* Create a task to check float switch trigger. */
-    xTaskCreatePinnedToCore(&floatSwitchTask, 
-                            "Float Switch Triggered.", 
-                            configMINIMAL_STACK_SIZE,
-                            NULL, 
-                            6, 
-                            &float_switch_handler, 
+    
+    /* Create a task to check time and trigger control */ 
+    xTaskCreatePinnedToCore(&planner_task,         
+                            "Planner Task",        
+                            3*configMINIMAL_STACK_SIZE,    
+                            NULL,               
+                            5,                  
+                            NULL,               
                             ctrl_core);
-
+            
     ESP_LOGI(TAG, "Program quits");
 } 

@@ -200,7 +200,8 @@ void led_strip_install()
 }
 
 esp_err_t led_strip_init(led_strip_t *strip)
-{
+{   
+    //ESP_LOGE(TAG, "Here 1");
     CHECK_ARG(strip && strip->length > 0 && strip->type < LED_STRIP_TYPE_MAX);
 
     strip->buf = calloc(strip->length, COLOR_SIZE(strip));
@@ -213,7 +214,9 @@ esp_err_t led_strip_init(led_strip_t *strip)
     rmt_config_t config = RMT_DEFAULT_CONFIG_TX(strip->gpio, strip->channel);
     config.clk_div = LED_STRIP_RMT_CLK_DIV;
 
+    //ESP_LOGE(TAG, "Here 2");
     CHECK(rmt_config(&config));
+    //ESP_LOGE(TAG, "Here 3");
     CHECK(rmt_driver_install(config.channel, 0, 0));
 
     sample_to_rmt_t f = NULL;
@@ -231,9 +234,11 @@ esp_err_t led_strip_init(led_strip_t *strip)
         default:
             break;
     }
+    //ESP_LOGE(TAG, "Here 4");
     CHECK(rmt_translator_init(config.channel, f));
 #ifdef LED_STRIP_BRIGHTNESS
     // No support for translator context prior to ESP-IDF 4.3
+    //ESP_LOGE(TAG, "Here 5");
     CHECK(rmt_translator_set_context(config.channel, strip));
 #endif
 

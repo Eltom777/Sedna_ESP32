@@ -14,6 +14,11 @@
 
 //LED config
 #define LED_TYPE LED_STRIP_WS2812
-#define CONFIG_LED_STRIP_LEN 60
+#define CONFIG_LED_STRIP_LEN 26
+
+//Servo config
+#define SERVO_MAX_PULSEWIDTH_US 2300
+#define SERVO_MIN_PULSEWIDTH_US 700
+#define SERVO_MAX_DEGREE 180
 
 #endif //hw_definition
