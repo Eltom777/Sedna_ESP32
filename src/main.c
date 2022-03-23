@@ -369,12 +369,12 @@ static void init_hw(void){
     io_conf.pull_up_en = 0;
     io_conf.pin_bit_mask = GPIO_HEATER_RELAY_PIN_SEL;
     gpio_config(&io_conf);
-    gpio_set_level(GPIO_HEATER_RELAY, 0);
+    gpio_set_level(GPIO_HEATER_RELAY, 1);
 
     //Wave relay
     io_conf.pin_bit_mask = GPIO_WAVE_RELAY_PIN_SEL;
     gpio_config(&io_conf);
-    gpio_set_level(GPIO_WAVE_RELAY, 0);
+    gpio_set_level(GPIO_WAVE_RELAY, 1);
 
     //Temp probe
     // Create a 1-Wire bus, using the RMT timeslot driver
@@ -534,7 +534,7 @@ static void planner_task(void *pvParameters)
                     milis_to_wait = adjust_time(&device_config.wave_on_time);
                     if(milis_to_wait < ONE_MINUTE) {
                         ESP_LOGI(TAGWAVE, "Turning wave maker on");
-                        gpio_set_level(GPIO_WAVE_RELAY, 0);
+                        gpio_set_level(GPIO_WAVE_RELAY, 1);
                         ESP_LOGI(TAGWAVE,"Wave Relay is On!");
                         ESP_LOGI(TAGWAVE,"Wave Relay State %i" ,gpio_get_level(GPIO_WAVE_RELAY));
 
@@ -546,7 +546,7 @@ static void planner_task(void *pvParameters)
                     milis_to_wait = adjust_time(&device_config.wave_off_time);
                     if(milis_to_wait < ONE_MINUTE) {
                         ESP_LOGI(TAGWAVE, "Turning wave maker off");
-                        gpio_set_level(GPIO_WAVE_RELAY, 1);
+                        gpio_set_level(GPIO_WAVE_RELAY, 0);
                         ESP_LOGI(TAGWAVE,"Wave Relay is Off!");
                         ESP_LOGI(TAGWAVE,"Wave Relay State %i" ,gpio_get_level(GPIO_WAVE_RELAY));
                     }
@@ -555,8 +555,8 @@ static void planner_task(void *pvParameters)
                     }
                 } else if(device_config.wave_force){
                     ESP_LOGI(TAGWAVE, "Forcing wave maker on");
-                    if(gpio_get_level(GPIO_WAVE_RELAY) == 1){
-                        gpio_set_level(GPIO_WAVE_RELAY, 0);
+                    if(gpio_get_level(GPIO_WAVE_RELAY) == 0){
+                        gpio_set_level(GPIO_WAVE_RELAY, 1);
                         ESP_LOGI(TAGWAVE,"Wave Relay is On!");
                         ESP_LOGI(TAGWAVE,"Wave Relay State %i" ,gpio_get_level(GPIO_WAVE_RELAY));
                     }else{
@@ -566,8 +566,8 @@ static void planner_task(void *pvParameters)
                 
                 } else{
                     ESP_LOGI(TAG, "Forcing wave maker off");
-                    if(gpio_get_level(GPIO_WAVE_RELAY) == 0){
-                        gpio_set_level(GPIO_WAVE_RELAY, 1);
+                    if(gpio_get_level(GPIO_WAVE_RELAY) == 1){
+                        gpio_set_level(GPIO_WAVE_RELAY, 0);
                         ESP_LOGI(TAGWAVE,"Wave Relay is Off!");
                         ESP_LOGI(TAGWAVE,"Wave Relay State %i" ,gpio_get_level(GPIO_WAVE_RELAY));
                     }else{
@@ -642,7 +642,7 @@ static void FSMTempCtrl(void* pvParameters)
             case Temp_Low_State:
                 ESP_LOGI(TAGTEMP,"At Low Temp State");
                 relayPower = gpio_get_level(GPIO_HEATER_RELAY);
-                if(relayPower == 1)
+                if(relayPower == 0)
                 {
                     ESP_LOGI(TAGTEMP,"Going to Turn Relay On State");
                     state = Turn_On_Relay_State;
@@ -656,7 +656,7 @@ static void FSMTempCtrl(void* pvParameters)
             case Temp_High_State:
                 ESP_LOGI(TAGTEMP,"At High Temp State");
                 relayPower = gpio_get_level(GPIO_HEATER_RELAY);
-                if(relayPower ==  0)
+                if(relayPower ==  1)
                 {
                     ESP_LOGI(TAGTEMP,"Going to Turn Relay Off State");
                     state = Turn_Off_Relay_State;
@@ -669,7 +669,7 @@ static void FSMTempCtrl(void* pvParameters)
             break;
             case Turn_On_Relay_State:
                 ESP_LOGI(TAGTEMP,"At Turn Relay On State");
-                gpio_set_level(GPIO_HEATER_RELAY, 0);
+                gpio_set_level(GPIO_HEATER_RELAY, 1);
                 ESP_LOGI(TAGTEMP,"Relay is On!");
                 ESP_LOGI(TAGTEMP,"Relay State %i" ,gpio_get_level(GPIO_HEATER_RELAY));
                 ESP_LOGI(TAGTEMP,"Going to Measure State.");
@@ -677,7 +677,7 @@ static void FSMTempCtrl(void* pvParameters)
             break;
             case Turn_Off_Relay_State:
                 ESP_LOGI(TAGTEMP,"At Turn Relay Off State");
-                gpio_set_level(GPIO_HEATER_RELAY, 1);
+                gpio_set_level(GPIO_HEATER_RELAY, 0);
                 ESP_LOGI(TAGTEMP,"Relay is Off!");
                 ESP_LOGI(TAGTEMP,"Relay State %i" ,gpio_get_level(GPIO_HEATER_RELAY));
                 ESP_LOGI(TAGTEMP,"Going to Measure State.");
