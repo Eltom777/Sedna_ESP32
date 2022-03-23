@@ -36,8 +36,6 @@
 #define MIN_TEMP 20
 #define OUTPUT_GPIO 5
 
-#define temp_threshold -5.0f
-
 static const char *TAG = "WIFI_APP";
 
 static EventGroupHandle_t wifi_event_group;
@@ -90,7 +88,7 @@ static void obtain_time(void)
 
 void init_telemtry_message() {
     telemtry_message.device_telemetry.current_temp = 20.0f;
-    telemtry_message.device_telemetry.food_count = 0;
+    telemtry_message.device_telemetry.food_count = -1;
     telemtry_message.low_level_switch = false;
     telemtry_message.water_leak = false;
 }
@@ -112,7 +110,6 @@ void publish_telemetry_event(iotc_context_handle_t context_handle,
 
     if(m_mqtt_callback.fetch_floatSW_event) {
         telemtry_message.low_level_switch = m_mqtt_callback.fetch_floatSW_event();
-
     }
     else {
         ESP_LOGE(TAG, "fetch_floatSW_event is not set...");
@@ -241,7 +238,7 @@ void on_connection_state_changed(iotc_context_handle_t in_context_handle,
         /* Create a timed task to publish every 10 seconds. */
         delayed_publish_task = iotc_schedule_timed_task(in_context_handle,
                                publish_telemetry_event, 10,
-                               30, /*user_data=*/NULL);
+                               10, /*user_data=*/NULL);
         break;
 
     /* IOTC_CONNECTION_STATE_OPEN_FAILED is set when there was a problem

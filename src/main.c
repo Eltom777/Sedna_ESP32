@@ -266,9 +266,10 @@ bool dequeue_telemetry(struct device_telemetry_t* device_telemetry_wifi)
     ESP_LOGI(TAG, "Grabbing Current Temp for Telemetry: %f", device_status.current_temp);
     ESP_LOGI(TAG, "Grabbing food count for Telemetry : %d", device_status.food_count);
 
-    float abs_difference = fabs(device_telemetry_wifi->food_count - device_status.food_count);
+    float abs_difference = fabs(device_telemetry_wifi->current_temp - device_status.current_temp);
+    ESP_LOGI(TAG, "Difference with previous captured value: %f", abs_difference);
     if(abs_difference >= temperature_telemetry_thresold_change) {
-        device_telemetry_wifi->food_count = device_status.food_count;
+        device_telemetry_wifi->current_temp = device_status.current_temp;
         telemetry_changed = true;
     }
 
