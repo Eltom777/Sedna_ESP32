@@ -10,6 +10,7 @@
 #include <time.h>
 #include <string.h>
 #include "lwip/apps/sntp.h"
+#include "hw_definition.h"
 #include <iotc.h>
 #include <iotc_jwt.h>
 
@@ -87,14 +88,23 @@ static void obtain_time(void)
     ESP_LOGI(TAG, "Time is set...");
 }
 
+void init_telemtry_message() {
+    telemtry_message.device_telemetry.current_temp = 20.0f;
+    telemtry_message.device_telemetry.food_count = 0;
+    telemtry_message.low_level_switch = false;
+    telemtry_message.water_leak = false;
+}
+
 void publish_telemetry_event(iotc_context_handle_t context_handle,
                              iotc_timed_task_handle_t timed_task, void *user_data)
 {
     IOTC_UNUSED(timed_task);
     IOTC_UNUSED(user_data);
 
+    //fetch values from ctrl_app
+    bool telemetry_changed = false;
     if(m_mqtt_callback.fetch_telemetry_event) {
-        m_mqtt_callback.fetch_telemetry_event(&telemtry_message.device_telemetry);
+        telemetry_changed = m_mqtt_callback.fetch_telemetry_event(&telemtry_message.device_telemetry);
     }
     else {
         ESP_LOGE(TAG, "fetch_telemetry_event is not set...");
@@ -102,6 +112,7 @@ void publish_telemetry_event(iotc_context_handle_t context_handle,
 
     if(m_mqtt_callback.fetch_floatSW_event) {
         telemtry_message.low_level_switch = m_mqtt_callback.fetch_floatSW_event();
+
     }
     else {
         ESP_LOGE(TAG, "fetch_floatSW_event is not set...");
@@ -114,21 +125,28 @@ void publish_telemetry_event(iotc_context_handle_t context_handle,
         ESP_LOGE(TAG, "fetch_waterlvl_event is not set...");
     }
 
-    char *publish_topic = NULL;
-    asprintf(&publish_topic, PUBLISH_TOPIC_EVENT, CONFIG_GIOT_DEVICE_ID);
-    char *publish_message = NULL;
-    asprintf(&publish_message, TELEMETRY_DATA, 
-             telemtry_message.device_telemetry.current_temp,
-             telemtry_message.device_telemetry.food_count, 
-             telemtry_message.low_level_switch, 
-             telemtry_message.water_leak);
-    ESP_LOGI(TAG, "publishing msg \"%s\" to topic: \"%s\"", publish_message, publish_topic);
+    //Only publish if telemetry changed or notifications
+    if(telemtry_message.water_leak ||
+       telemtry_message.low_level_switch ||
+       telemetry_changed) {
 
-    iotc_publish(context_handle, publish_topic, publish_message,
-                iotc_example_qos,
-                /*callback=*/NULL, /*user_data=*/NULL);
-    free(publish_topic);
-    free(publish_message);
+        ESP_LOGI(TAG, "Telemetry values changed...");
+        char *publish_topic = NULL;
+        asprintf(&publish_topic, PUBLISH_TOPIC_EVENT, CONFIG_GIOT_DEVICE_ID);
+        char *publish_message = NULL;
+        asprintf(&publish_message, TELEMETRY_DATA, 
+                telemtry_message.device_telemetry.current_temp,
+                telemtry_message.device_telemetry.food_count, 
+                telemtry_message.low_level_switch, 
+                telemtry_message.water_leak);
+        ESP_LOGI(TAG, "publishing msg \"%s\" to topic: \"%s\"", publish_message, publish_topic);
+
+        iotc_publish(context_handle, publish_topic, publish_message,
+                    iotc_example_qos,
+                    /*callback=*/NULL, /*user_data=*/NULL);
+        free(publish_topic);
+        free(publish_message);
+    }
 }
 
 void iotc_mqttlogic_subscribe_callback(
@@ -218,6 +236,8 @@ void on_connection_state_changed(iotc_context_handle_t in_context_handle,
         iotc_subscribe(in_context_handle, subscribe_topic_config, IOTC_MQTT_QOS_AT_LEAST_ONCE,
                        &iotc_mqttlogic_subscribe_callback, /*user_data=*/NULL);
         
+        init_telemtry_message();
+
         /* Create a timed task to publish every 10 seconds. */
         delayed_publish_task = iotc_schedule_timed_task(in_context_handle,
                                publish_telemetry_event, 10,

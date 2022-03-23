@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -31,10 +32,6 @@ static const char *TAGTEMP = "CTRL_TEMP";
 static const char *TAGFEED = "CTRL_FEED";
 static const char *TAGLED = "CTRL_LED";
 static const char *TAGWAVE = "CTRL_WAVE";
-
-//Com btwn app-wifi cores
-static xQueueHandle data_queue;
-static int queue_size = 2;
 
 //ISR Queues
 static xQueueHandle float_switch_ISR_queue;
@@ -260,46 +257,29 @@ static void update_device_config_callback(char* new_device_config, size_t buffer
     cJSON_Delete(root);
 }
 
-/*Ctrler-Wifi core communication----------------------------------------------------------------------------------------------------------*/
-static void enqueue_telemetry(void* pvParameters)
+bool dequeue_telemetry(struct device_telemetry_t* device_telemetry_wifi)
 {
+    bool telemetry_changed = false;
+    
+    xSemaphoreTake(device_status_mutex, portMAX_DELAY);
 
-    if(data_queue == NULL) {
-        ESP_LOGE(TAG, "Telemetry Queue is not set...");
-        return;
+    ESP_LOGI(TAG, "Grabbing Current Temp for Telemetry: %f", device_status.current_temp);
+    ESP_LOGI(TAG, "Grabbing food count for Telemetry : %d", device_status.food_count);
+
+    float abs_difference = fabs(device_telemetry_wifi->food_count - device_status.food_count);
+    if(abs_difference >= temperature_telemetry_thresold_change) {
+        device_telemetry_wifi->food_count = device_status.food_count;
+        telemetry_changed = true;
     }
 
-    for(;;) {
-        xSemaphoreTake(device_status_mutex, portMAX_DELAY);
-
-        ESP_LOGI(TAG, "Queuing Current Temp : %f", device_status.current_temp);
-        ESP_LOGI(TAG, "Queuing food count Temp : %d", device_status.food_count);
-
-        xQueueSendToBack(data_queue, &device_status, (TickType_t)0 );
-        
-        xSemaphoreGive(device_status_mutex);
-
-        vTaskDelay(30000 / portTICK_PERIOD_MS);
-    }    
-}
-
-void dequeue_telemetry(struct device_telemetry_t* device_telemetry_wifi)
-{
-    if(data_queue != NULL)
-    {
-        if((int) uxQueueMessagesWaiting(data_queue) > 0)
-        {
-            xQueueReceive(data_queue, device_telemetry_wifi, (TickType_t)0);
-        }
-        else
-        {
-            ESP_LOGI(TAG, "Telemetry Queue is empty...");
-        }
+    if(device_telemetry_wifi->food_count != device_status.food_count) {
+        device_telemetry_wifi->food_count = device_status.food_count;
+        telemetry_changed = true;
     }
-    else
-    {
-        ESP_LOGE(TAG, "Telemetry Queue is not set...");
-    }
+    
+    xSemaphoreGive(device_status_mutex);
+    
+    return telemetry_changed;
 }
 
 static bool dequeue_floatSW_notification_queue()
@@ -463,7 +443,7 @@ void feed_command_event() {
 void refill_command_event() {
     ESP_LOGI(TAGFEED, "refilling");
     xSemaphoreTake(device_status_mutex, portMAX_DELAY);
-    device_status.food_count = 14;
+    device_status.food_count = MAX_FEED_COUNT;
     xSemaphoreGive(device_status_mutex);
 }
 
@@ -695,13 +675,18 @@ void set_light(int brightness) {
     ESP_ERROR_CHECK(led_strip_flush(&strip));
 }
 
+void init_mutex() {
+    device_config_mutex = xSemaphoreCreateMutex();
+    device_status_mutex = xSemaphoreCreateMutex();
+    planner_task_mutex = xSemaphoreCreateBinary();
+}
+
 /*main----------------------------------------------------------------------------------------------------------*/
 void app_main()
 {
-    device_config.desired_temp = 17.0;
-    device_status.food_count = 14;
+    device_config.desired_temp = default_desired_temp;
+    device_status.food_count = MAX_FEED_COUNT;
 
-    data_queue = xQueueCreate(queue_size, sizeof(struct device_telemetry_t)); 
     float_switch_ISR_queue = xQueueCreate(1, sizeof(bool));
     liquid_sensor_ISR_queue = xQueueCreate(1, sizeof(bool));
 
@@ -717,24 +702,15 @@ void app_main()
     };
     esp_sta_init(mqtt_callback);
 
-    device_config_mutex = xSemaphoreCreateMutex();
-    device_status_mutex = xSemaphoreCreateMutex();
-    planner_task_mutex = xSemaphoreCreateBinary();
+    init_mutex();
     
     init_hw();
+
+    /* Create a task to control temperature feedback control*/
     xTaskCreatePinnedToCore(&FSMTempCtrl, 
                             "FSM run.", 
                             3*configMINIMAL_STACK_SIZE,
                             &device_config, 
-                            5, 
-                            NULL, 
-                            ctrl_core);
-
-    /* Create a task to queue data every 10 seconds. */ 
-    xTaskCreatePinnedToCore(&enqueue_telemetry, 
-                            "Enqueue Telemetry.", 
-                            6*configMINIMAL_STACK_SIZE,
-                            NULL, 
                             5, 
                             NULL, 
                             ctrl_core);

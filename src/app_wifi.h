@@ -7,7 +7,7 @@ typedef struct device_telemetry_t {
     int food_count;
 } device_telemetry_t;
 
-typedef void (*fetch_telemetry_event_f)(struct device_telemetry_t*);
+typedef bool (*fetch_telemetry_event_f)(struct device_telemetry_t*);
 typedef bool (*fetch_switchSW_event_f)(void);
 typedef bool(*fetch_waterlvl_event_f)(void);
 typedef void (*update_config_event_f)(char*, size_t);

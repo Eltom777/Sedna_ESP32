@@ -9,6 +9,8 @@
 //Temperature prob config
 #define DS18B20_RES 12
 #define SAMPLE_PERIOD 1000
+#define temperature_telemetry_thresold_change 0.5f
+#define default_desired_temp 20.0f
 
 #define temp_threshold -5.0f
 
@@ -20,5 +22,6 @@
 #define SERVO_MAX_PULSEWIDTH_US 2300
 #define SERVO_MIN_PULSEWIDTH_US 700
 #define SERVO_MAX_DEGREE 180
+#define MAX_FEED_COUNT 14
 
 #endif //hw_definition
