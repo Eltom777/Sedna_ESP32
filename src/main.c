@@ -138,7 +138,7 @@ static device_config_t device_config;
 static SemaphoreHandle_t device_config_mutex;
 
 //Device status for temperature and food count of system
-static device_telemetry_t device_status ={0};
+static struct telemtry_message_t device_status = {0};
 static SemaphoreHandle_t device_status_mutex;
 
 //Planner task synchronization
@@ -257,34 +257,7 @@ static void update_device_config_callback(char* new_device_config, size_t buffer
     cJSON_Delete(root);
 }
 
-bool dequeue_telemetry(struct device_telemetry_t* device_telemetry_wifi)
-{
-    bool telemetry_changed = false;
-    
-    xSemaphoreTake(device_status_mutex, portMAX_DELAY);
-
-    ESP_LOGI(TAG, "Grabbing Current Temp for Telemetry: %f", device_status.current_temp);
-    ESP_LOGI(TAG, "Grabbing food count for Telemetry : %d", device_status.food_count);
-
-    float abs_difference = fabs(device_telemetry_wifi->current_temp - device_status.current_temp);
-    ESP_LOGI(TAG, "Difference with previous captured value: %f", abs_difference);
-    if(abs_difference >= temperature_telemetry_thresold_change) {
-        device_telemetry_wifi->current_temp = device_status.current_temp;
-        telemetry_changed = true;
-    }
-
-    if(device_telemetry_wifi->food_count != device_status.food_count) {
-        device_telemetry_wifi->food_count = device_status.food_count;
-        telemetry_changed = true;
-    }
-    
-    xSemaphoreGive(device_status_mutex);
-    
-    return telemetry_changed;
-}
-
-static bool dequeue_floatSW_notification_queue()
-{
+static void dequeue_floatSW_notification_queue(bool* telemetry_floatSW_notification) {
 
     bool data = false;
     if(float_switch_ISR_queue != NULL)
@@ -302,11 +275,11 @@ static bool dequeue_floatSW_notification_queue()
     {
         ESP_LOGE(TAG, "Float switch ISR queue is not set...");
     }
-    return data;   
+
+    *telemetry_floatSW_notification = data;  
 }
 
-static bool dequeue_lsensor_notification_queue()
-{
+static void dequeue_lsensor_notification_queue(bool* telemetry_lsensor_notification) {
 
     bool data = false;
     if(liquid_sensor_ISR_queue != NULL)
@@ -324,7 +297,44 @@ static bool dequeue_lsensor_notification_queue()
     {
         ESP_LOGE(TAG, "Liquid sensor ISR queue is not set...");
     }
-    return data;   
+
+    *telemetry_lsensor_notification = data;   
+}
+
+bool dequeue_telemetry(struct telemtry_message_t* telemetry_message) {
+    
+    bool telemetry_changed = false;
+    
+    xSemaphoreTake(device_status_mutex, portMAX_DELAY);
+
+    ESP_LOGI(TAG, "Grabbing Current Temp for Telemetry: %f", device_status.current_temp);
+    ESP_LOGI(TAG, "Grabbing food count for Telemetry : %d", device_status.food_count);
+
+    float abs_difference = fabs(telemetry_message->current_temp - device_status.current_temp);
+    ESP_LOGI(TAG, "Difference with previous captured value: %f", abs_difference);
+    if(abs_difference >= temperature_telemetry_thresold_change) {
+        telemetry_message->current_temp = device_status.current_temp;
+        telemetry_changed = true;
+    }
+
+    if(telemetry_message->food_count != device_status.food_count) {
+        telemetry_message->food_count = device_status.food_count;
+        telemetry_changed = true;
+    }
+    
+    xSemaphoreGive(device_status_mutex);
+
+    bool prev_fwswitch_notification = telemetry_message->low_level_switch;
+    dequeue_floatSW_notification_queue(&telemetry_message->low_level_switch);
+    if(prev_fwswitch_notification != telemetry_message->low_level_switch)
+        telemetry_changed = true;
+    
+    bool prev_lsensor_notifcation = telemetry_message->water_leak; 
+    dequeue_lsensor_notification_queue(&telemetry_message->water_leak);
+    if(prev_lsensor_notifcation != telemetry_message->water_leak)
+        telemetry_changed = true;
+    
+    return telemetry_changed;
 }
 
 /*ISR Handler----------------------------------------------------------------------------------------------------------------------*/
@@ -695,8 +705,6 @@ void app_main()
     mqtt_callback_t mqtt_callback = 
     {
         .fetch_telemetry_event = dequeue_telemetry,
-        .fetch_floatSW_event = dequeue_floatSW_notification_queue,
-        .fetch_waterlvl_event = dequeue_lsensor_notification_queue,
         .update_config_event = update_device_config_callback,
         .feed_command_event = feed_command_event,
         .refill_command_event = refill_command_event

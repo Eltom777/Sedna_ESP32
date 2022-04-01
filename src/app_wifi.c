@@ -55,13 +55,7 @@ iotc_context_handle_t iotc_context = IOTC_INVALID_CONTEXT_HANDLE;
 
 static mqtt_callback_t m_mqtt_callback;
 
-typedef struct {
-    device_telemetry_t device_telemetry;
-    bool low_level_switch;
-    bool water_leak;
-} telemtry_message_t;
-static telemtry_message_t telemtry_message = {0};
-
+static struct telemtry_message_t telemtry_message = {0};
 
 static void initialize_sntp(void)
 {
@@ -87,8 +81,8 @@ static void obtain_time(void)
 }
 
 void init_telemtry_message() {
-    telemtry_message.device_telemetry.current_temp = 20.0f;
-    telemtry_message.device_telemetry.food_count = -1;
+    telemtry_message.current_temp = 23.0f;
+    telemtry_message.food_count = -1;
     telemtry_message.low_level_switch = false;
     telemtry_message.water_leak = false;
 }
@@ -102,38 +96,22 @@ void publish_telemetry_event(iotc_context_handle_t context_handle,
     //fetch values from ctrl_app
     bool telemetry_changed = false;
     if(m_mqtt_callback.fetch_telemetry_event) {
-        telemetry_changed = m_mqtt_callback.fetch_telemetry_event(&telemtry_message.device_telemetry);
+        telemetry_changed = m_mqtt_callback.fetch_telemetry_event(&telemtry_message);
     }
     else {
         ESP_LOGE(TAG, "fetch_telemetry_event is not set...");
     }
 
-    if(m_mqtt_callback.fetch_floatSW_event) {
-        telemtry_message.low_level_switch = m_mqtt_callback.fetch_floatSW_event();
-    }
-    else {
-        ESP_LOGE(TAG, "fetch_floatSW_event is not set...");
-    }
-
-    if(m_mqtt_callback.fetch_waterlvl_event) {
-        telemtry_message.water_leak = m_mqtt_callback.fetch_waterlvl_event();
-    }
-    else {
-        ESP_LOGE(TAG, "fetch_waterlvl_event is not set...");
-    }
-
     //Only publish if telemetry changed or notifications
-    if(telemtry_message.water_leak ||
-       telemtry_message.low_level_switch ||
-       telemetry_changed) {
+    if(telemetry_changed) {
 
         ESP_LOGI(TAG, "Telemetry values changed...");
         char *publish_topic = NULL;
         asprintf(&publish_topic, PUBLISH_TOPIC_EVENT, CONFIG_GIOT_DEVICE_ID);
         char *publish_message = NULL;
         asprintf(&publish_message, TELEMETRY_DATA, 
-                telemtry_message.device_telemetry.current_temp,
-                telemtry_message.device_telemetry.food_count, 
+                telemtry_message.current_temp,
+                telemtry_message.food_count, 
                 telemtry_message.low_level_switch, 
                 telemtry_message.water_leak);
         ESP_LOGI(TAG, "publishing msg \"%s\" to topic: \"%s\"", publish_message, publish_topic);

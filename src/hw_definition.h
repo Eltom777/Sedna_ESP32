@@ -10,13 +10,13 @@
 #define DS18B20_RES 12
 #define SAMPLE_PERIOD 1000
 #define temperature_telemetry_thresold_change 0.5f
-#define default_desired_temp 20.0f
+#define default_desired_temp 23.0f
 
 #define temp_threshold -5.0f
 
 //LED config
 #define LED_TYPE LED_STRIP_WS2812
-#define CONFIG_LED_STRIP_LEN 51
+#define CONFIG_LED_STRIP_LEN 60
 
 //Servo config
 #define SERVO_MAX_PULSEWIDTH_US 2300
