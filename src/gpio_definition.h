@@ -12,7 +12,7 @@
 //Feeder
 #define GPIO_FEEDER_SERVO 26
 //Wavemaker
-#define GPIO_WAVE_RELAY 2
+#define GPIO_WAVE_RELAY 13
 #define GPIO_WAVE_RELAY_PIN_SEL (1ULL << GPIO_WAVE_RELAY)
 //Float switch
 #define GPIO_FLOAT_SWITCH 33

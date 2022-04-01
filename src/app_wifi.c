@@ -237,8 +237,8 @@ void on_connection_state_changed(iotc_context_handle_t in_context_handle,
 
         /* Create a timed task to publish every 10 seconds. */
         delayed_publish_task = iotc_schedule_timed_task(in_context_handle,
-                               publish_telemetry_event, 10,
-                               10, /*user_data=*/NULL);
+                               publish_telemetry_event, 15,
+                               30, /*user_data=*/NULL);
         break;
 
     /* IOTC_CONNECTION_STATE_OPEN_FAILED is set when there was a problem
